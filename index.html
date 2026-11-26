@@ -1,0 +1,3009 @@
+<!DOCTYPE html>
+<html lang="ms" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portal Perpustakaan Ibnu Sina</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    /* Custom scrollbar untuk tema gelap */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #020617;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 selection:bg-amber-500/30 selection:text-amber-200">
+  <!-- Kontena Toast Pemberitahuan -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
+
+  <!-- Kontena Utama Aplikasi -->
+  <div id="app" class="min-h-screen flex flex-col"></div>
+
+  <!-- Kontena Modal -->
+  <div id="modal-container"></div>
+
+  <script>
+    // ============================================================================
+    // PORTAL PERPUSTAKAAN IBNU SINA - TETAPAN & DATA AWAL
+    // ============================================================================
+    const STORAGE_KEY = 'ibnu_sina_library_ms_v5';
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbziWJKx-C7kR0UWDSIggwxaqs4qkKKnDKtvfgMJs00wKvoXDzstohiGl7bprYS-AxID-g/exec';
+
+    const LOAN_DURATION_DAYS = 14;
+    const DAILY_FINE_RATE = 0.50;
+    const MAX_RENEWALS = 2;
+    const FINE_BLOCK_THRESHOLD = 10.00;
+
+    const INITIAL_DATA = {
+      systemDate: new Date().toISOString().split('T')[0],
+      currentUser: null,
+      settings: {
+        libraryName: 'Portal Perpustakaan Ibnu Sina',
+        loanDurationDays: 14,
+        dailyFineRate: 0.50,
+        maxRenewals: 2,
+        fineBlockThreshold: 10.00,
+        studentMaxLimit: 5,
+        teacherMaxLimit: 10
+      },
+      staffList: [
+        {
+          id: 'STF-001',
+          identityNumber: '101124110387',
+          name: 'MUHAMMAD AZRI BIN MOHD NAZROL',
+          position: 'Ketua Pustakawan'
+        },
+        {
+          id: 'STF-002',
+          identityNumber: 'LIB-001',
+          name: 'ENCIK RAHMAN BIN ISMAIL',
+          position: 'Pustakawan Kanan'
+        }
+      ],
+      members: [
+        {
+          id: '1001',
+          identityNumber: 'STU-1001',
+          name: 'ALICE TAN',
+          email: 'm-1001@moe-dl.edu.my',
+          tier: 'Pelajar',
+          maxLimit: 5,
+          status: 'Aktif',
+          fineBalance: 0.00,
+          joinedDate: '2024-01-15'
+        },
+        {
+          id: '1002',
+          identityNumber: 'STU-1002',
+          name: 'BOB LIM',
+          email: 'm-1002@moe-dl.edu.my',
+          tier: 'Pelajar',
+          maxLimit: 5,
+          status: 'Aktif',
+          fineBalance: 0.00,
+          joinedDate: '2024-03-10'
+        },
+        {
+          id: '1003',
+          identityNumber: '040512-11-5231',
+          name: 'AHMAD BIN ALI',
+          email: 'm-040512@moe-dl.edu.my',
+          tier: 'Pelajar',
+          maxLimit: 5,
+          status: 'Aktif',
+          fineBalance: 0.00,
+          joinedDate: '2024-05-20'
+        },
+        {
+          id: '1004',
+          identityNumber: 'STU-1004',
+          name: 'SARAH JENKINS',
+          email: 'g-1004@moe-dl.edu.my',
+          tier: 'Guru',
+          maxLimit: 10,
+          status: 'Aktif',
+          fineBalance: 0.00,
+          joinedDate: '2023-11-02'
+        }
+      ],
+      books: [],
+      copies: [],
+      loans: [],
+      holds: [],
+      logs: [
+        {
+          id: 'LOG-001',
+          timestamp: new Date().toISOString().split('T')[0],
+          type: 'sistem',
+          message: 'Portal Perpustakaan Ibnu Sina sedia digunakan.'
+        }
+      ]
+    };
+
+    // ============================================================================
+    // KEADAAN GLOBAL APLIKASI
+    // ============================================================================
+    let state = loadInitialState();
+    let cloudUrl = APPS_SCRIPT_URL;
+    let cloudStatus = 'syncing'; // 'syncing' | 'synced' | 'error'
+    let lastCloudSync = null;
+    let isInitialCloudFetchDone = false;
+    let cloudSyncTimer = null;
+
+    // Keadaan UI Sementara
+    let ui = {
+      loginRole: 'student', // 'student' | 'librarian'
+      loginName: '',
+      loginIdentity: '',
+      loginDelimaEmail: '',
+      loginError: '',
+      activeTab: 'catalog',
+      searchQuery: '',
+      selectedCategory: 'Semua',
+      checkoutPatronId: state.members[0]?.id || '1001',
+      checkoutCopyId: '',
+      checkinCopyId: '',
+      checkinDamaged: false,
+      activeModal: null, // 'addBook' | 'editBook' | 'importBooks' | 'addCopy' | 'addMember' | 'editMember' | 'importMembers' | 'confirmDelete'
+      selectedBookForCopies: null,
+      editingBook: null,
+      editingMember: null,
+      deleteTarget: null // { type: 'book' | 'member', id: string, title: string }
+    };
+
+    function loadInitialState() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          return {
+            ...INITIAL_DATA,
+            ...parsed,
+            settings: { ...INITIAL_DATA.settings, ...(parsed.settings || {}) },
+            staffList: parsed.staffList || INITIAL_DATA.staffList
+          };
+        }
+      } catch (e) {
+        console.error('Gagal memuatkan data setempat:', e);
+      }
+      return JSON.parse(JSON.stringify(INITIAL_DATA));
+    }
+
+    function saveState(triggerCloud = true) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {
+        console.error('Gagal menyimpan ke localStorage:', e);
+      }
+
+      if (triggerCloud && cloudUrl && isInitialCloudFetchDone) {
+        clearTimeout(cloudSyncTimer);
+        cloudSyncTimer = setTimeout(() => {
+          pushToCloud(state, cloudUrl);
+        }, 1200);
+      }
+    }
+
+    // ============================================================================
+    // FUNGSI BANTUAN TARIKH, ID & KESELAMATAN HTML
+    // ============================================================================
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function addDays(dateStr, days) {
+      const date = new Date(dateStr + 'T00:00:00');
+      date.setDate(date.getDate() + days);
+      return date.toISOString().split('T')[0];
+    }
+
+    function diffDays(dateStr1, dateStr2) {
+      const d1 = new Date(dateStr1 + 'T00:00:00');
+      const d2 = new Date(dateStr2 + 'T00:00:00');
+      return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24));
+    }
+
+    function generateId(prefix) {
+      return `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+
+    function generate4DigitMemberId(existingMembersList) {
+      const usedIds = new Set(existingMembersList.map((m) => String(m.id)));
+      let candidate = '';
+      do {
+        candidate = String(Math.floor(1000 + Math.random() * 9000));
+      } while (usedIds.has(candidate));
+      return candidate;
+    }
+
+    function addLog(type, message) {
+      state.logs = [
+        {
+          id: generateId('LOG'),
+          timestamp: state.systemDate,
+          type,
+          message
+        },
+        ...state.logs
+      ].slice(0, 60);
+    }
+
+    // ============================================================================
+    // PEMBERITAHUAN TOAST
+    // ============================================================================
+    function notify(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      const id = 'toast-' + Date.now() + Math.floor(Math.random() * 1000);
+      const isError = type === 'error';
+
+      const toastEl = document.createElement('div');
+      toastEl.id = id;
+      toastEl.className = `pointer-events-auto flex items-start gap-3 p-3.5 rounded-xl border shadow-2xl backdrop-blur-md transition-all ${
+        isError
+          ? 'bg-rose-950/90 border-rose-500/40 text-rose-100'
+          : 'bg-emerald-950/90 border-emerald-500/40 text-emerald-100'
+      }`;
+      toastEl.innerHTML = `
+        <i data-lucide="${isError ? 'alert-triangle' : 'check-circle-2'}" class="w-5 h-5 ${
+        isError ? 'text-rose-400' : 'text-emerald-400'
+      } shrink-0 mt-0.5"></i>
+        <p class="text-xs font-medium leading-relaxed">${escapeHtml(message)}</p>
+      `;
+
+      container.appendChild(toastEl);
+      if (window.lucide) lucide.createIcons();
+
+      setTimeout(() => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      }, 4500);
+    }
+
+    // ============================================================================
+    // CLOUD DATABASE (GOOGLE APPS SCRIPT)
+    // ============================================================================
+    async function fetchFromCloud(targetUrl = cloudUrl, silent = false) {
+      if (!targetUrl) return;
+      cloudStatus = 'syncing';
+      render();
+      try {
+        const response = await fetch(targetUrl);
+        const result = await response.json();
+        if (result.status === 'success' && result.data) {
+          const currentUserBackup = state.currentUser;
+          state = {
+            ...INITIAL_DATA,
+            ...result.data,
+            currentUser: currentUserBackup
+          };
+          saveState(false);
+          cloudStatus = 'synced';
+          lastCloudSync = result.lastUpdated || new Date().toISOString();
+          if (!silent) notify('Data berjaya diselaraskan dari Cloud Database!');
+        } else {
+          cloudStatus = 'synced';
+        }
+      } catch (err) {
+        console.error('Ralat tarik data Cloud:', err);
+        cloudStatus = 'error';
+        if (!silent) notify('Gagal menyambung ke Google Apps Script.', 'error');
+      } finally {
+        isInitialCloudFetchDone = true;
+        render();
+      }
+    }
+
+    async function pushToCloud(payloadData, targetUrl = cloudUrl) {
+      if (!targetUrl) return;
+      cloudStatus = 'syncing';
+      renderHeaderOnlyIfPossible();
+      try {
+        const { currentUser, ...persistentData } = payloadData;
+        const response = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'save',
+            data: persistentData
+          })
+        });
+        const result = await response.json();
+        if (result.status === 'success') {
+          cloudStatus = 'synced';
+          lastCloudSync = result.lastUpdated || new Date().toISOString();
+        } else {
+          cloudStatus = 'error';
+        }
+      } catch (err) {
+        console.error('Ralat simpan ke Cloud:', err);
+        cloudStatus = 'error';
+      }
+      renderHeaderOnlyIfPossible();
+    }
+
+    function renderHeaderOnlyIfPossible() {
+      // Kemas kini penuh hanya jika pengguna tidak sedang menaip dalam input
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
+        render();
+      }
+    }
+
+    // ============================================================================
+    // PENGESAHAN LOG MASUK & LOG KELUAR
+    // ============================================================================
+    function handleLoginSubmit(e) {
+      e.preventDefault();
+      ui.loginError = '';
+
+      const trimmedName = ui.loginName.trim().toUpperCase();
+      const trimmedId = ui.loginIdentity.trim().toUpperCase();
+      const trimmedEmail = ui.loginDelimaEmail.trim().toLowerCase();
+
+      if (!trimmedName || !trimmedId) {
+        ui.loginError = 'Sila masukkan Nama Penuh dan Nombor Pengenalan anda.';
+        render();
+        return;
+      }
+
+      if (ui.loginRole === 'student') {
+        const existingIdx = state.members.findIndex(
+          (m) => m.identityNumber.toUpperCase() === trimmedId
+        );
+
+        if (existingIdx !== -1) {
+          const existingMember = state.members[existingIdx];
+          state.members[existingIdx] = {
+            ...existingMember,
+            name: trimmedName
+          };
+          state.currentUser = {
+            role: 'student',
+            id: existingMember.id,
+            name: trimmedName,
+            identityNumber: existingMember.identityNumber,
+            email: existingMember.email
+          };
+          addLog('sistem', `Log Masuk Pelajar: ${trimmedName} (${trimmedId}) melog masuk ke Portal Pelajar.`);
+          saveState();
+          notify(`SELAMAT KEMBALI, ${trimmedName}!`);
+        } else {
+          if (!trimmedEmail) {
+            ui.loginError = 'Pendaftaran kali pertama: Sila masukkan Emel DELIMa anda.';
+            render();
+            return;
+          }
+
+          const newMemberId = generate4DigitMemberId(state.members);
+          const newMember = {
+            id: newMemberId,
+            identityNumber: trimmedId,
+            name: trimmedName,
+            email: trimmedEmail,
+            tier: 'Pelajar',
+            maxLimit: 5,
+            status: 'Aktif',
+            fineBalance: 0.00,
+            joinedDate: state.systemDate
+          };
+
+          state.members.push(newMember);
+          state.currentUser = {
+            role: 'student',
+            id: newMember.id,
+            name: newMember.name,
+            identityNumber: newMember.identityNumber,
+            email: newMember.email
+          };
+          addLog(
+            'sistem',
+            `Pendaftaran Automatik & Log Masuk: ${trimmedName} (ID: ${trimmedId}, DELIMa: ${trimmedEmail}, No. Kad Ahli: ${newMemberId}).`
+          );
+          saveState();
+          notify(`AKAUN BERJAYA DIDAFTARKAN! NO. KAD AHLI: ${newMemberId}`);
+        }
+        ui.activeTab = 'loans';
+      } else {
+        const matchedStaff = state.staffList.find(
+          (s) => s.identityNumber.toUpperCase() === trimmedId
+        );
+
+        if (!matchedStaff) {
+          ui.loginError = 'Nombor Pengenalan Staf tidak ditemui dalam sistem.';
+          render();
+          return;
+        }
+
+        state.currentUser = {
+          role: 'librarian',
+          id: matchedStaff.id,
+          name: trimmedName,
+          identityNumber: matchedStaff.identityNumber
+        };
+        addLog('sistem', `Log Masuk Staf: ${trimmedName} (${trimmedId}) melog masuk ke Kaunter Staf.`);
+        saveState();
+        ui.activeTab = 'circulation';
+        notify(`SELAMAT BERTUGAS, ${trimmedName}!`);
+      }
+
+      ui.loginName = '';
+      ui.loginIdentity = '';
+      ui.loginDelimaEmail = '';
+      render();
+    }
+
+    function handleLogout() {
+      state.currentUser = null;
+      ui.loginError = '';
+      saveState(false);
+      notify('Anda telah berjaya log keluar.');
+      render();
+    }
+
+    // ============================================================================
+    // DATA TERBITAN (COMPUTED STATE)
+    // ============================================================================
+    function getEnrichedLoans() {
+      return state.loans.map((loan) => {
+        const book = state.books.find((b) => b.id === loan.bookId);
+        const patron = state.members.find((m) => m.id === loan.patronId);
+        const isReturned = loan.status === 'Dipulangkan';
+        const overdueDays = isReturned
+          ? Math.max(0, diffDays(loan.dueDate, loan.returnDate))
+          : Math.max(0, diffDays(loan.dueDate, state.systemDate));
+        const accruedFine = isReturned
+          ? loan.fineAmount
+          : Number((overdueDays * DAILY_FINE_RATE).toFixed(2));
+        const effectiveStatus = isReturned
+          ? 'Dipulangkan'
+          : overdueDays > 0
+          ? 'Tertunggak'
+          : 'Aktif';
+
+        return {
+          ...loan,
+          bookTitle: book?.title || 'BUKU TIDAK DIKETAHUI',
+          bookAuthor: book?.author || 'PENGARANG TIDAK DIKETAHUI',
+          patronName: patron?.name || 'AHLI TIDAK DIKETAHUI',
+          overdueDays,
+          accruedFine,
+          effectiveStatus
+        };
+      });
+    }
+
+    function validateCheckoutEligibility(patron, copyId) {
+      if (!patron) return { valid: false, reason: 'Sila pilih rekod ahli yang sah.' };
+      if (patron.status !== 'Aktif') {
+        return { valid: false, reason: `Akaun ahli berstatus ${patron.status}. Peminjaman disekat.` };
+      }
+
+      const enriched = getEnrichedLoans();
+      const activePatronLoans = enriched.filter(
+        (l) => l.patronId === patron.id && l.effectiveStatus !== 'Dipulangkan'
+      );
+      const liveOverdueFines = activePatronLoans.reduce((sum, l) => sum + l.accruedFine, 0);
+      const totalExposure = patron.fineBalance + liveOverdueFines;
+
+      if (totalExposure >= FINE_BLOCK_THRESHOLD) {
+        return {
+          valid: false,
+          reason: `Jumlah denda (RM ${totalExposure.toFixed(2)}) melebihi had sekatan RM ${FINE_BLOCK_THRESHOLD.toFixed(2)}.`
+        };
+      }
+
+      if (activePatronLoans.length >= patron.maxLimit) {
+        return {
+          valid: false,
+          reason: `Had pinjaman maksimum tercapai (${activePatronLoans.length}/${patron.maxLimit} buku).`
+        };
+      }
+
+      if (!copyId) return { valid: false, reason: 'Sila pilih atau imbas kod bar naskhah buku.' };
+
+      const copy = state.copies.find((c) => c.id.toLowerCase() === copyId.trim().toLowerCase());
+      if (!copy) return { valid: false, reason: `Kod bar "${copyId}" tidak ditemui dalam inventori.` };
+
+      const book = state.books.find((b) => b.id === copy.bookId);
+      if (book?.isReference) {
+        return { valid: false, reason: `"${book.title}" adalah bahan Rujukan Sahaja dan tidak boleh dipinjam keluar.` };
+      }
+
+      if (copy.status === 'Dipinjam') {
+        return { valid: false, reason: `Naskhah ${copy.id} sedang dipinjam oleh ahli lain.` };
+      }
+      if (copy.status === 'Rosak' || copy.status === 'Hilang') {
+        return { valid: false, reason: `Naskhah ${copy.id} ditandakan sebagai ${copy.status}.` };
+      }
+      if (copy.status === 'Ditempah' && copy.heldForPatronId !== patron.id) {
+        return { valid: false, reason: `Naskhah ${copy.id} sedang ditempah untuk ahli lain.` };
+      }
+
+      const alreadyHasBook = activePatronLoans.some((l) => l.bookId === copy.bookId);
+      if (alreadyHasBook) {
+        return { valid: false, reason: `Ahli ini sudah meminjam naskhah lain bagi judul "${book?.title}".` };
+      }
+
+      return { valid: true, copy, book };
+    }
+
+    // ============================================================================
+    // TINDAKAN SIRKULASI: PINJAM, PULANG, TEMPAH, PERBAHARUI
+    // ============================================================================
+    function handleCheckout(patronId, copyId) {
+      const patron = state.members.find((m) => m.id === patronId);
+      const check = validateCheckoutEligibility(patron, copyId);
+
+      if (!check.valid) {
+        notify(check.reason, 'error');
+        return;
+      }
+
+      const { copy, book } = check;
+      const loanDays = Number(state.settings?.loanDurationDays) || LOAN_DURATION_DAYS;
+      const dueDate = addDays(state.systemDate, loanDays);
+      const newLoan = {
+        id: generateId('LN'),
+        copyId: copy.id,
+        bookId: book.id,
+        patronId: patron.id,
+        issueDate: state.systemDate,
+        dueDate,
+        returnDate: null,
+        renewals: 0,
+        status: 'Aktif',
+        fineAmount: 0
+      };
+
+      state.copies = state.copies.map((c) =>
+        c.id === copy.id ? { ...c, status: 'Dipinjam', heldForPatronId: null } : c
+      );
+
+      state.holds = state.holds.map((h) =>
+        h.bookId === book.id && h.patronId === patron.id && h.status === 'Sedia Diambil'
+          ? { ...h, status: 'Selesai' }
+          : h
+      );
+
+      state.loans.unshift(newLoan);
+      addLog('pinjaman', `Pinjaman: "${book.title}" (${copy.id}) dipinjamkan kepada ${patron.name}. Tarikh pulang: ${dueDate}.`);
+      saveState();
+
+      ui.checkoutCopyId = '';
+      notify(`Berjaya pinjam "${book.title}" kepada ${patron.name} (Pulang: ${dueDate}).`);
+      render();
+    }
+
+    function handleCheckin(copyId, isDamaged = false) {
+      const copy = state.copies.find((c) => c.id.toLowerCase() === copyId.trim().toLowerCase());
+      if (!copy) {
+        notify(`Naskhah "${copyId}" tidak ditemui dalam inventori.`, 'error');
+        return;
+      }
+
+      const activeLoan = state.loans.find((l) => l.copyId === copy.id && l.status !== 'Dipulangkan');
+      const book = state.books.find((b) => b.id === copy.bookId);
+
+      if (!activeLoan && copy.status === 'Tersedia') {
+        notify(`Naskhah ${copy.id} sudah pun berstatus Tersedia di rak.`, 'error');
+        return;
+      }
+
+      let fineCharged = 0;
+      const damageFee = isDamaged ? 15.00 : 0;
+
+      if (activeLoan) {
+        const overdueDays = Math.max(0, diffDays(activeLoan.dueDate, state.systemDate));
+        const fineRate = Number(state.settings?.dailyFineRate) || DAILY_FINE_RATE;
+        fineCharged = Number((overdueDays * fineRate).toFixed(2));
+        const totalPenalty = fineCharged + damageFee;
+
+        state.loans = state.loans.map((l) =>
+          l.id === activeLoan.id
+            ? {
+                ...l,
+                returnDate: state.systemDate,
+                status: 'Dipulangkan',
+                fineAmount: totalPenalty
+              }
+            : l
+        );
+
+        if (totalPenalty > 0) {
+          state.members = state.members.map((m) =>
+            m.id === activeLoan.patronId
+              ? { ...m, fineBalance: Number((m.fineBalance + totalPenalty).toFixed(2)) }
+              : m
+          );
+        }
+      }
+
+      let nextCopyStatus = 'Tersedia';
+      let heldForPatronId = null;
+      let holdAlert = '';
+
+      if (isDamaged) {
+        nextCopyStatus = 'Rosak';
+      } else {
+        const nextHold = state.holds.find(
+          (h) => h.bookId === copy.bookId && h.status === 'Menunggu'
+        );
+        if (nextHold) {
+          nextCopyStatus = 'Ditempah';
+          heldForPatronId = nextHold.patronId;
+          const expiryDate = addDays(state.systemDate, 2);
+          state.holds = state.holds.map((h) =>
+            h.id === nextHold.id
+              ? { ...h, status: 'Sedia Diambil', assignedCopyId: copy.id, expiryDate }
+              : h
+          );
+          const holdPatron = state.members.find((m) => m.id === nextHold.patronId);
+          holdAlert = ` Ditempah untuk ${holdPatron?.name} (ambil sebelum ${expiryDate}).`;
+        }
+      }
+
+      state.copies = state.copies.map((c) =>
+        c.id === copy.id ? { ...c, status: nextCopyStatus, heldForPatronId } : c
+      );
+
+      addLog(
+        'pemulangan',
+        `Pemulangan: "${book?.title}" (${copy.id}) dipulangkan. Status: ${nextCopyStatus}.${
+          fineCharged > 0 ? ` Denda lewat: RM ${fineCharged.toFixed(2)}.` : ''
+        }${isDamaged ? ' Yuran kerosakan RM 15.00 dikenakan.' : ''}${holdAlert}`
+      );
+      saveState();
+
+      ui.checkinCopyId = '';
+      ui.checkinDamaged = false;
+      notify(`"${book?.title}" dipulangkan → ${nextCopyStatus}.${holdAlert}`);
+      render();
+    }
+
+    function handlePlaceHold(bookId, patronId) {
+      const patron = state.members.find((m) => m.id === patronId);
+      const book = state.books.find((b) => b.id === bookId);
+      if (!patron || !book) return;
+
+      if (book.isReference) {
+        notify('Bahan Rujukan Sahaja tidak boleh ditempah.', 'error');
+        return;
+      }
+
+      const existingHold = state.holds.find(
+        (h) =>
+          h.bookId === bookId &&
+          h.patronId === patronId &&
+          (h.status === 'Menunggu' || h.status === 'Sedia Diambil')
+      );
+      if (existingHold) {
+        notify('Anda sudah mempunyai tempahan aktif bagi buku ini.', 'error');
+        return;
+      }
+
+      const activeLoan = state.loans.find(
+        (l) => l.bookId === bookId && l.patronId === patronId && l.status !== 'Dipulangkan'
+      );
+      if (activeLoan) {
+        notify('Anda sedang meminjam naskhah buku ini.', 'error');
+        return;
+      }
+
+      state.holds.push({
+        id: generateId('HLD'),
+        bookId,
+        patronId,
+        requestDate: state.systemDate,
+        expiryDate: null,
+        assignedCopyId: null,
+        status: 'Menunggu'
+      });
+
+      addLog('tempahan', `Tempahan: ${patron.name} menempah judul "${book.title}".`);
+      saveState();
+      notify(`Tempahan berjaya bagi "${book.title}".`);
+      render();
+    }
+
+    function handleRenewLoan(loanId) {
+      const loan = getEnrichedLoans().find((l) => l.id === loanId);
+      if (!loan) return;
+      const maxRen = Number(state.settings?.maxRenewals) || MAX_RENEWALS;
+
+      if (loan.effectiveStatus === 'Tertunggak') {
+        notify('Buku yang tertunggak tidak boleh diperbaharui. Sila pulangkan di kaunter.', 'error');
+        return;
+      }
+      if (loan.renewals >= maxRen) {
+        notify(`Had maksimum pembaharuan (${maxRen}) telah dicapai.`, 'error');
+        return;
+      }
+
+      const hasPendingHolds = state.holds.some(
+        (h) => h.bookId === loan.bookId && h.status === 'Menunggu'
+      );
+      if (hasPendingHolds) {
+        notify('Pembaharuan ditolak: Terdapat ahli lain sedang menunggu tempahan buku ini.', 'error');
+        return;
+      }
+
+      const loanDays = Number(state.settings?.loanDurationDays) || LOAN_DURATION_DAYS;
+      const newDueDate = addDays(loan.dueDate, loanDays);
+      state.loans = state.loans.map((l) =>
+        l.id === loanId ? { ...l, dueDate: newDueDate, renewals: l.renewals + 1 } : l
+      );
+
+      addLog('pembaharuan', `Pembaharuan: Pinjaman "${loan.bookTitle}" (${loan.copyId}) dilanjutkan sehingga ${newDueDate}.`);
+      saveState();
+      notify(`Pinjaman diperbaharui! Tarikh pulang baharu: ${newDueDate}`);
+      render();
+    }
+
+    function handleCancelHold(holdId) {
+      const hold = state.holds.find((h) => h.id === holdId);
+      if (!hold) return;
+
+      state.holds = state.holds.map((h) =>
+        h.id === holdId ? { ...h, status: 'Dibatalkan' } : h
+      );
+
+      if (hold.status === 'Sedia Diambil' && hold.assignedCopyId) {
+        const nextHold = state.holds.find(
+          (h) => h.bookId === hold.bookId && h.status === 'Menunggu'
+        );
+        if (nextHold) {
+          const expiryDate = addDays(state.systemDate, 2);
+          state.holds = state.holds.map((h) =>
+            h.id === nextHold.id
+              ? { ...h, status: 'Sedia Diambil', assignedCopyId: hold.assignedCopyId, expiryDate }
+              : h
+          );
+          state.copies = state.copies.map((c) =>
+            c.id === hold.assignedCopyId ? { ...c, heldForPatronId: nextHold.patronId } : c
+          );
+        } else {
+          state.copies = state.copies.map((c) =>
+            c.id === hold.assignedCopyId
+              ? { ...c, status: 'Tersedia', heldForPatronId: null }
+              : c
+          );
+        }
+      }
+
+      addLog('tempahan', `Tempahan ${hold.id} telah dibatalkan.`);
+      saveState();
+      notify('Tempahan berjaya dibatalkan.');
+      render();
+    }
+
+    // ============================================================================
+    // TINDAKAN STAF: KATALOG, AHLI, CSV, DENDA
+    // ============================================================================
+    function handleSettleFines(patronId) {
+      const patron = state.members.find((m) => m.id === patronId);
+      if (!patron || patron.fineBalance <= 0) return;
+
+      const paidAmount = patron.fineBalance;
+      state.members = state.members.map((m) =>
+        m.id === patronId ? { ...m, fineBalance: 0.00 } : m
+      );
+
+      addLog('denda', `Bayaran Denda: ${patron.name} menyelesaikan denda sebanyak RM ${paidAmount.toFixed(2)}.`);
+      saveState();
+      notify(`Bayaran denda RM ${paidAmount.toFixed(2)} untuk ${patron.name} selesai!`);
+      render();
+    }
+
+    function handleToggleMemberStatus(patronId) {
+      state.members = state.members.map((m) => {
+        if (m.id !== patronId) return m;
+        const newStatus = m.status === 'Aktif' ? 'Digantung' : 'Aktif';
+        return { ...m, status: newStatus };
+      });
+      addLog('sistem', `Status keahlian bagi ahli ${patronId} dikemas kini.`);
+      saveState();
+      notify('Status keahlian dikemas kini.');
+      render();
+    }
+
+    function handlePromoteToStaff(patronId) {
+      const member = state.members.find((m) => m.id === patronId);
+      if (!member) return;
+
+      const alreadyStaff = state.staffList.some(
+        (s) => s.identityNumber.toUpperCase() === member.identityNumber.toUpperCase()
+      );
+      if (alreadyStaff) {
+        notify(`${member.name} sudah pun berdaftar dalam senarai staf.`, 'error');
+        return;
+      }
+
+      const newStaff = {
+        id: generateId('STF'),
+        identityNumber: member.identityNumber.toUpperCase(),
+        name: member.name.toUpperCase(),
+        position: 'Staf Perpustakaan'
+      };
+
+      state.staffList.push(newStaff);
+      addLog('sistem', `Lantikan Staf: ${newStaff.name} (${newStaff.identityNumber}) ditambah sebagai Staf Perpustakaan.`);
+      saveState();
+      notify(`${newStaff.name} berjaya ditambah sebagai Staf Perpustakaan.`);
+      render();
+    }
+
+    function handleDeleteMember(patronId) {
+      const member = state.members.find((m) => m.id === patronId);
+      if (!member) return;
+
+      const hasActiveLoans = state.loans.some(
+        (l) => l.patronId === patronId && l.status !== 'Dipulangkan'
+      );
+      if (hasActiveLoans) {
+        notify(`Tidak boleh membuang ${member.name} kerana masih mempunyai buku yang belum dipulangkan.`, 'error');
+        return;
+      }
+
+      state.members = state.members.filter((m) => m.id !== patronId);
+      state.holds = state.holds.filter((h) => h.patronId !== patronId);
+      addLog('sistem', `Rekod Dipadam: Pelajar/Ahli ${member.name} (${member.identityNumber}) telah dibuang daripada sistem.`);
+      saveState();
+
+      if (ui.checkoutPatronId === patronId) {
+        ui.checkoutPatronId = state.members[0]?.id || '';
+      }
+
+      notify(`Rekod ${member.name} berjaya dibuang.`);
+      render();
+    }
+
+    function handleEditMemberSubmit(e) {
+      e.preventDefault();
+      const member = ui.editingMember;
+      if (!member) return;
+
+      const formEl = e.target;
+      const name = formEl.name.value.trim().toUpperCase();
+      const identityNumber = formEl.identityNumber.value.trim().toUpperCase();
+      const email = formEl.email.value.trim().toLowerCase();
+      const tier = formEl.tier.value;
+      const status = formEl.status.value;
+      const fineBalance = Math.max(0, parseFloat(formEl.fineBalance.value) || 0);
+
+      if (!name || !identityNumber) return;
+
+      const duplicateId = state.members.some(
+        (m) => m.id !== member.id && m.identityNumber.toUpperCase() === identityNumber
+      );
+      if (duplicateId) {
+        notify(`No. Pengenalan ${identityNumber} sudah digunakan oleh ahli lain.`, 'error');
+        return;
+      }
+
+      const limits = {
+        Biasa: Number(state.settings?.studentMaxLimit) || 5,
+        Pelajar: Number(state.settings?.studentMaxLimit) || 5,
+        Guru: Number(state.settings?.teacherMaxLimit) || 10
+      };
+
+      state.members = state.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              name,
+              identityNumber,
+              email,
+              tier,
+              maxLimit: limits[tier] || 5,
+              status,
+              fineBalance: Number(fineBalance.toFixed(2))
+            }
+          : m
+      );
+
+      // Kemas kini maklumat dalam staffList jika ahli ini juga seorang staf
+      state.staffList = state.staffList.map((s) =>
+        s.identityNumber.toUpperCase() === member.identityNumber.toUpperCase()
+          ? { ...s, name, identityNumber }
+          : s
+      );
+
+      addLog('sistem', `Rekod Ahli Disunting: ${name} (Kad: ${member.id}, ID: ${identityNumber}).`);
+      saveState();
+
+      ui.activeModal = null;
+      ui.editingMember = null;
+      notify(`Maklumat ahli ${name} berjaya dikemas kini!`);
+      render();
+    }
+
+    function handleEditBookSubmit(e) {
+      e.preventDefault();
+      const book = ui.editingBook;
+      if (!book) return;
+
+      const formEl = e.target;
+      const title = formEl.title.value.trim().toUpperCase();
+      const author = formEl.author.value.trim().toUpperCase();
+      const isbn = formEl.isbn.value.trim().toUpperCase();
+      const category = formEl.category.value.trim() || 'Umum';
+      const dewey = formEl.dewey.value.trim().toUpperCase() || '000.00';
+      const year = parseInt(formEl.year.value, 10) || book.year || new Date().getFullYear();
+      const isReference = formEl.isReference.checked;
+      const summary = formEl.summary.value.trim() || 'Tiada sinopsis tambahan.';
+
+      if (!title || !author) return;
+
+      state.books = state.books.map((b) =>
+        b.id === book.id
+          ? {
+              ...b,
+              title,
+              author,
+              isbn,
+              category,
+              dewey,
+              year,
+              isReference,
+              summary
+            }
+          : b
+      );
+
+      addLog('katalog', `Buku Disunting: "${title}" (${author}) telah dikemas kini.`);
+      saveState();
+
+      ui.activeModal = null;
+      ui.editingBook = null;
+      notify(`Maklumat buku "${title}" berjaya dikemas kini!`);
+      render();
+    }
+
+    function handleDeleteBook(bookId) {
+      const book = state.books.find((b) => b.id === bookId);
+      if (!book) return;
+
+      const hasActiveLoans = state.loans.some(
+        (l) => l.bookId === bookId && l.status !== 'Dipulangkan'
+      );
+      if (hasActiveLoans) {
+        notify(`Tidak boleh membuang "${book.title}" kerana masih ada naskhah yang sedang dipinjam.`, 'error');
+        return;
+      }
+
+      state.books = state.books.filter((b) => b.id !== bookId);
+      state.copies = state.copies.filter((c) => c.bookId !== bookId);
+      state.holds = state.holds.filter((h) => h.bookId !== bookId);
+
+      addLog('katalog', `Buku Dipadam: "${book.title}" (${book.isbn}) dan semua naskhahnya telah dibuang.`);
+      saveState();
+
+      notify(`Buku "${book.title}" berjaya dibuang daripada katalog.`);
+      render();
+    }
+
+    function handleAddBookSubmit(e) {
+      e.preventDefault();
+      const formEl = e.target;
+      const title = formEl.title.value.trim().toUpperCase();
+      const author = formEl.author.value.trim().toUpperCase();
+      if (!title || !author) return;
+
+      const newBookId = generateId('BK');
+      const newBook = {
+        id: newBookId,
+        title,
+        author,
+        isbn: formEl.isbn.value.trim().toUpperCase() || `ISBN-${Math.floor(100000 + Math.random() * 900000)}`,
+        category: formEl.category.value.trim() || 'Umum',
+        year: new Date().getFullYear(),
+        dewey: formEl.dewey.value.trim().toUpperCase() || '000.00',
+        coverColor: 'from-amber-600 to-orange-700',
+        isReference: formEl.isReference.checked,
+        summary: formEl.summary?.value.trim() || 'Tiada sinopsis tambahan.'
+      };
+
+      const copyCount = Math.max(1, Number(formEl.copiesCount.value) || 1);
+      const locationBase = formEl.location.value.trim() || 'Rak Utama';
+      const newCopies = Array.from({ length: copyCount }, (_, idx) => ({
+        id: `BC-${Math.floor(10000 + Math.random() * 90000)}-${idx + 1}`,
+        bookId: newBookId,
+        location: `${locationBase} • ${newBook.dewey}`,
+        status: 'Tersedia',
+        heldForPatronId: null
+      }));
+
+      state.books.unshift(newBook);
+      state.copies.push(...newCopies);
+      addLog('katalog', `Katalog Baharu: "${newBook.title}" (${newBook.author}) ditambah dengan ${copyCount} naskhah fizikal.`);
+      saveState();
+
+      ui.activeModal = null;
+      notify(`"${newBook.title}" berjaya ditambah ke katalog!`);
+      render();
+    }
+
+    function handleImportBooksCsv(csvText) {
+      const lines = csvText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (lines.length === 0) {
+        notify('Fail CSV kosong. Sila masukkan data buku.', 'error');
+        return;
+      }
+
+      const addedBooks = [];
+      const addedCopies = [];
+
+      lines.forEach((line, idx) => {
+        const cols = line.split(',').map((c) => c.trim());
+        if (idx === 0 && (cols[0].toLowerCase() === 'tajuk' || cols[0].toLowerCase() === 'title')) {
+          return;
+        }
+        if (cols.length < 2 || !cols[0] || !cols[1]) return;
+
+        const title = cols[0].toUpperCase();
+        const author = cols[1].toUpperCase();
+        const isbn = (cols[2] || `ISBN-${Math.floor(100000 + Math.random() * 900000)}`).toUpperCase();
+        const category = cols[3] || 'Umum';
+        const dewey = (cols[4] || '000.00').toUpperCase();
+        const copyCount = Math.max(1, parseInt(cols[5], 10) || 1);
+        const isReference = (cols[6] || '').toLowerCase() === 'ya' || (cols[6] || '').toLowerCase() === 'true';
+
+        const newBookId = `BK-${Math.floor(1000 + Math.random() * 9000)}-${idx}`;
+        addedBooks.push({
+          id: newBookId,
+          title,
+          author,
+          isbn,
+          category,
+          year: new Date().getFullYear(),
+          dewey,
+          coverColor: 'from-amber-600 to-orange-700',
+          isReference,
+          summary: 'Diimport melalui fail CSV.'
+        });
+
+        for (let i = 0; i < copyCount; i++) {
+          addedCopies.push({
+            id: `BC-${Math.floor(10000 + Math.random() * 90000)}-${i + 1}`,
+            bookId: newBookId,
+            location: `Rak ${category} • ${dewey}`,
+            status: 'Tersedia',
+            heldForPatronId: null
+          });
+        }
+      });
+
+      if (addedBooks.length === 0) {
+        notify('Tiada baris buku yang sah ditemui dalam CSV.', 'error');
+        return;
+      }
+
+      state.books = [...addedBooks, ...state.books];
+      state.copies.push(...addedCopies);
+      addLog('katalog', `Import CSV Buku: ${addedBooks.length} judul buku (${addedCopies.length} naskhah) berjaya diimport.`);
+      saveState();
+
+      ui.activeModal = null;
+      notify(`${addedBooks.length} judul buku berjaya diimport daripada CSV!`);
+      render();
+    }
+
+    function handleAddCopySubmit(e) {
+      e.preventDefault();
+      const book = ui.selectedBookForCopies;
+      if (!book) return;
+
+      const location = e.target.location.value.trim() || `Rak Umum • ${book.dewey}`;
+      const newCopy = {
+        id: `BC-${Math.floor(10000 + Math.random() * 90000)}`,
+        bookId: book.id,
+        location,
+        status: 'Tersedia',
+        heldForPatronId: null
+      };
+
+      state.copies.push(newCopy);
+      addLog('katalog', `Naskhah Baharu: ${newCopy.id} ditambah bagi judul "${book.title}".`);
+      saveState();
+
+      ui.activeModal = null;
+      ui.selectedBookForCopies = null;
+      notify(`Naskhah fizikal ${newCopy.id} berjaya ditambah.`);
+      render();
+    }
+
+    function handleAddMemberSubmit(e) {
+      e.preventDefault();
+      const formEl = e.target;
+      const name = formEl.name.value.trim().toUpperCase();
+      const identityNumber = formEl.identityNumber.value.trim().toUpperCase();
+      const email = formEl.email.value.trim().toLowerCase();
+      const tier = formEl.tier.value;
+
+      if (!name || !identityNumber) return;
+
+      const limits = { Biasa: 5, Pelajar: 5, Guru: 10 };
+      const newMember = {
+        id: generate4DigitMemberId(state.members),
+        identityNumber,
+        name,
+        email,
+        tier,
+        maxLimit: limits[tier] || 5,
+        status: 'Aktif',
+        fineBalance: 0.00,
+        joinedDate: state.systemDate
+      };
+
+      state.members.push(newMember);
+      addLog('sistem', `Ahli Didaftarkan: ${newMember.name} (No. Kad Ahli: ${newMember.id}, Kategori ${newMember.tier}, ID: ${newMember.identityNumber}, DELIMa: ${newMember.email}).`);
+      saveState();
+
+      ui.activeModal = null;
+      notify(`Ahli ${newMember.name} berjaya didaftarkan (No. Kad: ${newMember.id}).`);
+      render();
+    }
+
+    function handleImportMembersCsv(csvText) {
+      const lines = csvText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (lines.length === 0) {
+        notify('Fail CSV kosong. Sila masukkan data pelajar.', 'error');
+        return;
+      }
+
+      const limits = { Biasa: 5, Pelajar: 5, Guru: 10 };
+      const addedMembers = [];
+      const existingIds = new Set(state.members.map((m) => m.identityNumber.toUpperCase()));
+      const usedCardIds = new Set(state.members.map((m) => String(m.id)));
+
+      lines.forEach((line, idx) => {
+        const cols = line.split(',').map((c) => c.trim());
+        if (idx === 0 && (cols[0].toLowerCase() === 'nama' || cols[0].toLowerCase() === 'name')) {
+          return;
+        }
+        if (cols.length < 2 || !cols[0] || !cols[1]) return;
+
+        const name = cols[0].toUpperCase();
+        const identityNumber = cols[1].toUpperCase();
+        if (existingIds.has(identityNumber)) return;
+
+        let cardId = '';
+        do {
+          cardId = String(Math.floor(1000 + Math.random() * 9000));
+        } while (usedCardIds.has(cardId));
+        usedCardIds.add(cardId);
+
+        const email = (cols[2] || `${name.toLowerCase().replace(/\s+/g, '.')}@moe-dl.edu.my`).toLowerCase();
+        const rawTier = cols[3] || 'Pelajar';
+        const tier = ['Pelajar', 'Biasa', 'Guru'].includes(rawTier) ? rawTier : 'Pelajar';
+
+        existingIds.add(identityNumber);
+        addedMembers.push({
+          id: cardId,
+          identityNumber,
+          name,
+          email,
+          tier,
+          maxLimit: limits[tier] || 5,
+          status: 'Aktif',
+          fineBalance: 0.00,
+          joinedDate: state.systemDate
+        });
+      });
+
+      if (addedMembers.length === 0) {
+        notify('Tiada rekod pelajar baharu yang sah ditemui (atau ID sudah wujud).', 'error');
+        return;
+      }
+
+      state.members.push(...addedMembers);
+      addLog('sistem', `Import CSV Pelajar: ${addedMembers.length} ahli baharu berjaya diimport.`);
+      saveState();
+
+      ui.activeModal = null;
+      notify(`${addedMembers.length} pelajar/ahli berjaya diimport daripada CSV!`);
+      render();
+    }
+
+    // ============================================================================
+    // PAPARAN ANTARA MUKA (RENDER ENGINE)
+    // ============================================================================
+    function render() {
+      const appEl = document.getElementById('app');
+
+      if (!state.currentUser) {
+        appEl.innerHTML = renderLoginView();
+        bindLoginEvents();
+      } else {
+        appEl.innerHTML = renderDashboardView();
+        bindDashboardEvents();
+        renderStudentBarcode();
+      }
+
+      renderModals();
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function renderStudentBarcode() {
+      if (!state.currentUser || state.currentUser.role !== 'student') return;
+      const activePatron =
+        state.members.find((m) => m.id === state.currentUser.id) || state.members[0];
+      const svgEl = document.getElementById('student-identity-barcode');
+      if (svgEl && activePatron && window.JsBarcode) {
+        try {
+          JsBarcode(svgEl, activePatron.identityNumber, {
+            format: 'CODE128',
+            lineColor: '#0f172a',
+            background: '#ffffff',
+            width: 1.7,
+            height: 44,
+            displayValue: true,
+            fontSize: 11,
+            font: 'monospace',
+            margin: 6
+          });
+        } catch (err) {
+          console.error('Ralat menjana barkod ahli:', err);
+        }
+      }
+    }
+
+    function downloadStudentBarcode() {
+      const svgEl = document.getElementById('student-identity-barcode');
+      if (!svgEl) return;
+      const activePatron =
+        state.members.find((m) => m.id === state.currentUser?.id) || state.members[0];
+      const serializer = new XMLSerializer();
+      const svgStr = serializer.serializeToString(svgEl);
+      const canvas = document.createElement('canvas');
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = img.width * 2;
+        canvas.height = img.height * 2;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const link = document.createElement('a');
+        link.download = `BARKOD-AHLI-${activePatron?.identityNumber || 'PELAJAR'}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        notify('Imej barkod ahli berjaya dimuat turun!');
+      };
+      img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgStr)));
+    }
+
+    // ----------------------------------------------------------------------------
+    // 1. PAPARAN HALAMAN LOG MASUK
+    // ----------------------------------------------------------------------------
+    function renderLoginView() {
+      const trimmedId = ui.loginIdentity.trim().toUpperCase();
+      const isReturningStudent =
+        trimmedId.length > 0 &&
+        state.members.some((m) => m.identityNumber.toUpperCase() === trimmedId);
+
+      return `
+        <!-- Bar Atas Log Masuk -->
+        <div class="border-b border-slate-800/80 bg-slate-900/50 backdrop-blur-xl">
+          <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                <i data-lucide="library" class="w-5 h-5 text-slate-950"></i>
+              </div>
+              <div>
+                <span class="font-bold text-base tracking-tight text-white">Portal Perpustakaan Ibnu Sina</span>
+                <span class="hidden sm:inline-block ml-2 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  Akses Portal
+                </span>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div
+                title="Pangkalan Data Awan Tunggal"
+                class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border ${
+                  cloudStatus === 'error'
+                    ? 'bg-rose-950/50 border-rose-500/30 text-rose-300'
+                    : 'bg-emerald-950/50 border-emerald-500/30 text-emerald-300'
+                }"
+              >
+                <i data-lucide="cloud" class="w-3.5 h-3.5 ${
+                  cloudStatus === 'syncing'
+                    ? 'animate-pulse text-amber-400'
+                    : cloudStatus === 'error'
+                    ? 'text-rose-400'
+                    : 'text-emerald-400'
+                }"></i>
+                <span>${
+                  cloudStatus === 'syncing'
+                    ? 'Menyelaras...'
+                    : cloudStatus === 'error'
+                    ? 'Ralat Cloud'
+                    : 'Cloud Aktif'
+                }</span>
+              </div>
+              <div class="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+                <i data-lucide="calendar" class="w-3.5 h-3.5 text-amber-400"></i>
+                <span>${escapeHtml(state.systemDate)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Kandungan Borang Log Masuk -->
+        <main class="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <div class="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+            <div class="text-center mb-6">
+              <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 border border-amber-500/30 flex items-center justify-center mx-auto mb-3">
+                <i data-lucide="book-open" class="w-7 h-7 text-amber-400"></i>
+              </div>
+              <h1 class="text-2xl font-bold text-white tracking-tight">Portal Perpustakaan Ibnu Sina</h1>
+              <p class="text-xs text-slate-400 mt-1">
+                Sila log masuk menggunakan Nama Penuh dan Nombor Pengenalan anda
+              </p>
+            </div>
+
+            <!-- Pilihan Peranan: Pelajar / Staf Perpustakaan -->
+            <div class="grid grid-cols-2 gap-2 p-1.5 bg-slate-950 border border-slate-800 rounded-2xl mb-6">
+              <button
+                type="button"
+                id="btn-role-student"
+                class="flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  ui.loginRole === 'student'
+                    ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-white'
+                }"
+              >
+                <i data-lucide="graduation-cap" class="w-4 h-4"></i>
+                Portal Pelajar
+              </button>
+              <button
+                type="button"
+                id="btn-role-librarian"
+                class="flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  ui.loginRole === 'librarian'
+                    ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-white'
+                }"
+              >
+                <i data-lucide="shield-alert" class="w-4 h-4"></i>
+                Staf Perpustakaan
+              </button>
+            </div>
+
+            ${
+              ui.loginError
+                ? `<div class="mb-4 p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 flex items-start gap-2.5 text-xs text-rose-200">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-400 shrink-0 mt-0.5"></i>
+                    <span>${escapeHtml(ui.loginError)}</span>
+                  </div>`
+                : ''
+            }
+
+            <form id="login-form" class="space-y-4">
+              <div>
+                <label class="text-xs font-semibold text-slate-300 block mb-1.5">
+                  Nama Penuh <span class="text-rose-400">*</span>
+                </label>
+                <div class="relative">
+                  <i data-lucide="user-check" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                  <input
+                    type="text"
+                    id="input-login-name"
+                    required
+                    value="${escapeHtml(ui.loginName)}"
+                    class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm uppercase text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs font-semibold text-slate-300 block mb-1.5">
+                  ${
+                    ui.loginRole === 'student'
+                      ? 'ID Pelajar / Nombor Kad Pengenalan'
+                      : 'Nombor Kad Pengenalan / ID Staf'
+                  } <span class="text-rose-400">*</span>
+                </label>
+                <div class="relative">
+                  <i data-lucide="id-card" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                  <input
+                    type="text"
+                    id="input-login-identity"
+                    required
+                    value="${escapeHtml(ui.loginIdentity)}"
+                    class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm font-mono text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div id="login-delima-wrapper">
+                ${
+                  ui.loginRole === 'student' && !isReturningStudent
+                    ? `<div>
+                        <label class="text-xs font-semibold text-slate-300 block mb-1.5">
+                          Emel DELIMa <span class="text-rose-400">*</span>
+                        </label>
+                        <div class="relative">
+                          <i data-lucide="mail" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                          <input
+                            type="email"
+                            id="input-login-email"
+                            required
+                            value="${escapeHtml(ui.loginDelimaEmail)}"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors"
+                          />
+                        </div>
+                        <p class="text-[11px] text-slate-500 mt-1.5">
+                          Diperlukan untuk pendaftaran kali pertama sahaja.
+                        </p>
+                      </div>`
+                    : ui.loginRole === 'student' && isReturningStudent
+                    ? `<div class="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300">
+                        <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-400 shrink-0"></i>
+                        <span>Rekod berdaftar ditemui. Terus tekan butang di bawah untuk log masuk.</span>
+                      </div>`
+                    : ''
+                }
+              </div>
+
+              <button
+                type="submit"
+                id="btn-login-submit"
+                class="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 mt-2"
+              >
+                <i data-lucide="lock" class="w-4 h-4"></i>
+                <span>${
+                  ui.loginRole === 'student'
+                    ? isReturningStudent
+                      ? 'Log Masuk ke Portal Pelajar'
+                      : 'Daftar & Log Masuk'
+                    : 'Log Masuk ke Kaunter Staf'
+                }</span>
+              </button>
+            </form>
+          </div>
+        </main>
+
+        <footer class="border-t border-slate-900 py-4 px-4 text-center text-xs text-slate-600">
+          © 2025, LEMBAGA PENGAWAS PUSAT SUMBER SM SAINS SULTAN MAHMUD, HAK CIPTA TERPELIHARA DI BAWAH AKTA HAK CIPTA 1987 (AKTA 332)
+        </footer>
+      `;
+    }
+
+    function bindLoginEvents() {
+      document.getElementById('btn-role-student')?.addEventListener('click', () => {
+        ui.loginRole = 'student';
+        ui.loginError = '';
+        render();
+      });
+
+      document.getElementById('btn-role-librarian')?.addEventListener('click', () => {
+        ui.loginRole = 'librarian';
+        ui.loginError = '';
+        render();
+      });
+
+      const nameInput = document.getElementById('input-login-name');
+      nameInput?.addEventListener('input', (e) => {
+        ui.loginName = e.target.value.toUpperCase();
+        e.target.value = ui.loginName;
+      });
+
+      const identityInput = document.getElementById('input-login-identity');
+      identityInput?.addEventListener('input', (e) => {
+        ui.loginIdentity = e.target.value;
+        // Kemas kini bahagian Emel DELIMa tanpa hilang fokus input
+        if (ui.loginRole === 'student') {
+          const trimmedId = ui.loginIdentity.trim().toUpperCase();
+          const isReturning =
+            trimmedId.length > 0 &&
+            state.members.some((m) => m.identityNumber.toUpperCase() === trimmedId);
+          const wrapper = document.getElementById('login-delima-wrapper');
+          const submitSpan = document.querySelector('#btn-login-submit span');
+
+          if (wrapper) {
+            wrapper.innerHTML = !isReturning
+              ? `<div>
+                  <label class="text-xs font-semibold text-slate-300 block mb-1.5">
+                    Emel DELIMa <span class="text-rose-400">*</span>
+                  </label>
+                  <div class="relative">
+                    <i data-lucide="mail" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                    <input
+                      type="email"
+                      id="input-login-email"
+                      required
+                      value="${escapeHtml(ui.loginDelimaEmail)}"
+                      class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors"
+                    />
+                  </div>
+                  <p class="text-[11px] text-slate-500 mt-1.5">
+                    Diperlukan untuk pendaftaran kali pertama sahaja.
+                  </p>
+                </div>`
+              : `<div class="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300">
+                  <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-400 shrink-0"></i>
+                  <span>Rekod berdaftar ditemui. Terus tekan butang di bawah untuk log masuk.</span>
+                </div>`;
+
+            document.getElementById('input-login-email')?.addEventListener('input', (ev) => {
+              ui.loginDelimaEmail = ev.target.value;
+            });
+            if (window.lucide) lucide.createIcons();
+          }
+
+          if (submitSpan) {
+            submitSpan.textContent = isReturning ? 'Log Masuk ke Portal Pelajar' : 'Daftar & Log Masuk';
+          }
+        }
+      });
+
+      document.getElementById('input-login-email')?.addEventListener('input', (e) => {
+        ui.loginDelimaEmail = e.target.value;
+      });
+
+      document.getElementById('login-form')?.addEventListener('submit', handleLoginSubmit);
+    }
+
+    // ----------------------------------------------------------------------------
+    // 2. PAPARAN UTAMA SELEPAS LOG MASUK (PELAJAR & STAF)
+    // ----------------------------------------------------------------------------
+    function renderDashboardView() {
+      const isLibrarian = state.currentUser.role === 'librarian';
+      const enrichedLoans = getEnrichedLoans();
+
+      const stats = {
+        totalTitles: state.books.length,
+        totalCopies: state.copies.length,
+        availableCopies: state.copies.filter((c) => c.status === 'Tersedia').length,
+        checkedOutCopies: state.copies.filter((c) => c.status === 'Dipinjam').length,
+        overdueLoans: enrichedLoans.filter((l) => l.effectiveStatus === 'Tertunggak').length,
+        activeHolds: state.holds.filter((h) => h.status === 'Menunggu' || h.status === 'Sedia Diambil').length
+      };
+
+      return `
+        <!-- Bar Navigasi Atas -->
+        <header class="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-900/85 backdrop-blur-xl">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                <i data-lucide="library" class="w-5 h-5 text-slate-950"></i>
+              </div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-base tracking-tight text-white">Portal Perpustakaan Ibnu Sina</span>
+                  <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                    isLibrarian
+                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                      : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                  }">
+                    ${isLibrarian ? 'Paparan Staf' : 'Portal Pelajar'}
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-400 hidden sm:block">
+                  Tarikh Sistem: <span class="text-slate-200 font-medium">${escapeHtml(state.systemDate)}</span>
+                </p>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 sm:gap-3">
+              <button
+                id="btn-sync-cloud-header"
+                type="button"
+                title="Segerak Data dengan Google Sheets"
+                class="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${
+                  cloudStatus === 'synced'
+                    ? 'bg-emerald-950/50 border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
+                    : cloudStatus === 'syncing'
+                    ? 'bg-amber-950/50 border-amber-500/30 text-amber-300'
+                    : 'bg-rose-950/50 border-rose-500/30 text-rose-300 hover:bg-rose-900/50'
+                }"
+              >
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5 ${
+                  cloudStatus === 'syncing'
+                    ? 'animate-spin text-amber-400'
+                    : cloudStatus === 'synced'
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
+                }"></i>
+                <span class="hidden md:inline">
+                  ${
+                    cloudStatus === 'syncing'
+                      ? 'Menyelaras...'
+                      : cloudStatus === 'synced'
+                      ? 'Segerak Cloud'
+                      : 'Cuba Segerak'
+                  }
+                </span>
+              </button>
+
+              <div class="hidden md:flex items-center gap-2.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5">
+                <div class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center text-xs font-bold">
+                  ${escapeHtml(state.currentUser.name.charAt(0))}
+                </div>
+                <div class="text-left">
+                  <p class="text-xs font-semibold text-white leading-none">${escapeHtml(state.currentUser.name)}</p>
+                  <p class="text-[10px] font-mono text-slate-400 mt-0.5">${escapeHtml(state.currentUser.identityNumber)}</p>
+                </div>
+              </div>
+
+              <button
+                id="btn-logout"
+                type="button"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 hover:text-rose-300 border border-slate-700 hover:border-rose-500/30 text-xs font-semibold text-slate-200 transition-colors"
+              >
+                <i data-lucide="log-out" class="w-3.5 h-3.5"></i>
+                <span>Log Keluar</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <!-- Kandungan Utama -->
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
+          <!-- Kad Statistik Sistem -->
+          <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            ${renderStatCard('Jumlah Judul', stats.totalTitles, 'book-open', 'text-amber-400')}
+            ${renderStatCard('Jumlah Naskhah', stats.totalCopies, 'layers', 'text-sky-400')}
+            ${renderStatCard('Tersedia Di Rak', stats.availableCopies, 'check-circle-2', 'text-emerald-400')}
+            ${renderStatCard('Sedang Dipinjam', stats.checkedOutCopies, 'arrow-right-left', 'text-indigo-400')}
+            ${renderStatCard('Tempahan Aktif', stats.activeHolds, 'bookmark', 'text-purple-400')}
+            ${renderStatCard(
+              'Pinjaman Tertunggak',
+              stats.overdueLoans,
+              'alert-triangle',
+              stats.overdueLoans > 0 ? 'text-rose-400' : 'text-slate-400'
+            )}
+          </section>
+
+          ${isLibrarian ? renderLibrarianSection(enrichedLoans) : renderStudentSection(enrichedLoans)}
+        </main>
+
+        <footer class="border-t border-slate-900 mt-12 py-6 px-4 text-center text-xs text-slate-600">
+          © 2025, LEMBAGA PENGAWAS PUSAT SUMBER SM SAINS SULTAN MAHMUD, HAK CIPTA TERPELIHARA DI BAWAH AKTA HAK CIPTA 1987 (AKTA 332)
+        </footer>
+      `;
+    }
+
+    function renderStatCard(label, value, iconName, colorClass) {
+      return `
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between">
+          <div>
+            <p class="text-[11px] text-slate-400 font-medium">${escapeHtml(label)}</p>
+            <p class="text-xl font-bold text-white mt-0.5">${escapeHtml(value)}</p>
+          </div>
+          <div class="w-9 h-9 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center ${colorClass}">
+            <i data-lucide="${iconName}" class="w-4 h-4"></i>
+          </div>
+        </div>
+      `;
+    }
+
+    // ----------------------------------------------------------------------------
+    // 2A. SEKSYEN PAPARAN PELAJAR
+    // ----------------------------------------------------------------------------
+    function renderStudentSection(enrichedLoans) {
+      const activePatron =
+        state.members.find((m) => m.id === state.currentUser.id) || state.members[0];
+      if (!activePatron) return '';
+
+      const patronActiveLoans = enrichedLoans.filter(
+        (l) => l.patronId === activePatron.id && l.effectiveStatus !== 'Dipulangkan'
+      );
+      const patronPastLoans = enrichedLoans.filter(
+        (l) => l.patronId === activePatron.id && l.effectiveStatus === 'Dipulangkan'
+      );
+      const patronHolds = state.holds.filter(
+        (h) => h.patronId === activePatron.id && h.status !== 'Dibatalkan' && h.status !== 'Selesai'
+      );
+      const patronLiveFines = patronActiveLoans.reduce((sum, l) => sum + l.accruedFine, 0);
+      const totalFines = activePatron.fineBalance + patronLiveFines;
+
+      const studentTabs = [
+        { id: 'loans', label: `Pinjaman Saya (${patronActiveLoans.length})`, icon: 'book-open' },
+        { id: 'holds', label: `Tempahan Saya (${patronHolds.length})`, icon: 'bookmark' },
+        { id: 'settings', label: 'Tetapan Akaun', icon: 'settings' }
+      ];
+
+      if (!studentTabs.some((t) => t.id === ui.activeTab)) {
+        ui.activeTab = 'loans';
+      }
+
+      let tabContentHtml = '';
+
+      if (ui.activeTab === 'loans') {
+        tabContentHtml = `
+          <div class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <!-- Kaunter Pinjaman -->
+              <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div class="flex items-center justify-between">
+                  <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                    Kaunter Pinjaman (Check-Out)
+                  </h3>
+                  <span class="text-[11px] text-slate-400">Tempoh Pinjaman: ${LOAN_DURATION_DAYS} Hari</span>
+                </div>
+
+                <div class="space-y-3">
+                  <div>
+                    <label class="text-xs font-medium text-slate-400 block mb-1">1. Pilih Ahli / Pelajar</label>
+                    <select
+                      id="select-checkout-patron"
+                      class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                    >
+                      ${state.members
+                        .map(
+                          (m) => `
+                        <option value="${escapeHtml(m.id)}" ${ui.checkoutPatronId === m.id ? 'selected' : ''}>
+                          ${escapeHtml(m.name)} (Kad: ${escapeHtml(m.id)} • ID: ${escapeHtml(m.identityNumber)} • ${escapeHtml(m.status)})
+                        </option>`
+                        )
+                        .join('')}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label class="text-xs font-medium text-slate-400 block mb-1">
+                      2. Imbas / Pilih Kod Bar Naskhah Fizikal
+                    </label>
+                    <div class="flex gap-2">
+                      <input
+                        type="text"
+                        id="input-checkout-copy"
+                        value="${escapeHtml(ui.checkoutCopyId)}"
+                        placeholder="Contoh: BC-10001-1"
+                        class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
+                      />
+                      <select
+                        id="select-checkout-copy-quick"
+                        class="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-300 max-w-[190px]"
+                      >
+                        <option value="">Pilih Pantas...</option>
+                        ${state.copies
+                          .filter((c) => c.status === 'Tersedia' || c.status === 'Ditempah')
+                          .map((c) => {
+                            const b = state.books.find((bk) => bk.id === c.bookId);
+                            return `<option value="${escapeHtml(c.id)}" ${ui.checkoutCopyId === c.id ? 'selected' : ''}>${escapeHtml(c.id)} — ${escapeHtml(b?.title)} (${escapeHtml(c.status)})</option>`;
+                          })
+                          .join('')}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div id="checkout-validation-box">${validationBoxHtml}</div>
+
+                  <button
+                    type="button"
+                    id="btn-confirm-checkout"
+                    class="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
+                  >
+                    Sahkan Pinjaman Buku
+                  </button>
+                </div>
+              </div>
+
+              <!-- Kaunter Pemulangan -->
+              <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div class="flex items-center justify-between">
+                  <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    Kaunter Pemulangan (Check-In)
+                  </h3>
+                  <span class="text-[11px] text-slate-400">Kadar Denda: RM ${DAILY_FINE_RATE.toFixed(2)}/hari</span>
+                </div>
+
+                <div class="space-y-3">
+                  <div>
+                    <label class="text-xs font-medium text-slate-400 block mb-1">
+                      1. Imbas / Pilih Kod Bar Buku Dipulangkan
+                    </label>
+                    <div class="flex gap-2">
+                      <input
+                        type="text"
+                        id="input-checkin-copy"
+                        value="${escapeHtml(ui.checkinCopyId)}"
+                        placeholder="Contoh: BC-10001-1"
+                        class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                      />
+                      <select
+                        id="select-checkin-copy-quick"
+                        class="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-300 max-w-[190px]"
+                      >
+                        <option value="">Buku Dipinjam...</option>
+                        ${state.copies
+                          .filter((c) => c.status === 'Dipinjam')
+                          .map((c) => {
+                            const b = state.books.find((bk) => bk.id === c.bookId);
+                            return `<option value="${escapeHtml(c.id)}" ${ui.checkinCopyId === c.id ? 'selected' : ''}>${escapeHtml(c.id)} — ${escapeHtml(b?.title)}</option>`;
+                          })
+                          .join('')}
+                      </select>
+                    </div>
+                  </div>
+
+                  <label class="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      id="checkbox-checkin-damaged"
+                      ${ui.checkinDamaged ? 'checked' : ''}
+                      class="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                    />
+                    <span class="text-xs text-slate-300">
+                      Tandakan sebagai <strong>Rosak / Perlu Baiki</strong> (+RM 15.00 caj kerosakan)
+                    </span>
+                  </label>
+
+                  <div class="p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400">
+                    Sistem akan mengira denda kelewatan secara automatik dan mengemas kini giliran tempahan ahli seterusnya jika ada.
+                  </div>
+
+                  <button
+                    type="button"
+                    id="btn-confirm-checkin"
+                    class="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-colors"
+                  >
+                    Proses Pemulangan Buku
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Senarai Pinjaman Aktif Semasa -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-sm">Senarai Pinjaman Aktif & Tertunggak</h3>
+                <span class="text-xs text-slate-400">${activeLoansList.length} naskhah di luar</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th class="p-3">Kod Bar</th>
+                      <th class="p-3">Judul Buku</th>
+                      <th class="p-3">Peminjam</th>
+                      <th class="p-3">Tarikh Pulang</th>
+                      <th class="p-3">Status</th>
+                      <th class="p-3">Denda</th>
+                      <th class="p-3 text-right">Tindakan</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/60">
+                    ${
+                      activeLoansList.length === 0
+                        ? `<tr><td colSpan="7" class="p-6 text-center text-slate-500">Tiada rekod pinjaman aktif buat masa ini.</td></tr>`
+                        : activeLoansList
+                            .map(
+                              (loan) => `
+                            <tr class="hover:bg-slate-800/30">
+                              <td class="p-3 font-mono text-slate-300">${escapeHtml(loan.copyId)}</td>
+                              <td class="p-3 font-semibold text-white">${escapeHtml(loan.bookTitle)}</td>
+                              <td class="p-3 text-slate-300">${escapeHtml(loan.patronName)}</td>
+                              <td class="p-3 text-slate-300">${escapeHtml(loan.dueDate)}</td>
+                              <td class="p-3">
+                                <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                                  loan.effectiveStatus === 'Tertunggak'
+                                    ? 'bg-rose-500/20 text-rose-300'
+                                    : 'bg-emerald-500/15 text-emerald-300'
+                                }">
+                                  ${escapeHtml(loan.effectiveStatus)}
+                                </span>
+                              </td>
+                              <td class="p-3 font-semibold text-rose-300">RM ${loan.accruedFine.toFixed(2)}</td>
+                              <td class="p-3 text-right">
+                                <button
+                                  type="button"
+                                  data-copy-id="${escapeHtml(loan.copyId)}"
+                                  class="btn-quick-checkin px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-semibold"
+                                >
+                                  Pulangkan
+                                </button>
+                              </td>
+                            </tr>`
+                            )
+                            .join('')
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (ui.activeTab === 'inventory') {
+        tabHtml = `
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="font-bold text-white text-base">Katalog Buku & Naskhah Fizikal</h3>
+                <p class="text-xs text-slate-400">Tambah judul baharu atau import senarai buku melalui CSV</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-open-import-books"
+                  class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-xs transition-colors"
+                >
+                  <i data-lucide="upload" class="w-4 h-4"></i> Import Buku (CSV)
+                </button>
+                <button
+                  type="button"
+                  id="btn-open-add-book"
+                  class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
+                >
+                  <i data-lucide="plus" class="w-4 h-4"></i> Tambah Judul Buku
+                </button>
+              </div>
+            </div>
+
+            ${
+              state.books.length === 0
+                ? `<div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center">
+                    <i data-lucide="book-open" class="w-10 h-10 text-slate-600 mx-auto mb-3"></i>
+                    <p class="text-sm font-semibold text-slate-300">Senarai buku adalah kosong</p>
+                    <p class="text-xs text-slate-500 mt-1">
+                      Klik butang "Import Buku (CSV)" untuk memuat naik senarai buku secara pukal atau "Tambah Judul Buku".
+                    </p>
+                  </div>`
+                : `<div class="grid grid-cols-1 gap-3">
+                    ${state.books
+                      .map((book) => {
+                        const copies = state.copies.filter((c) => c.bookId === book.id);
+                        return `
+                          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                              <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">${escapeHtml(book.dewey)}</span>
+                                <span class="text-[11px] text-slate-400">ISBN: ${escapeHtml(book.isbn)}</span>
+                                ${
+                                  book.isReference
+                                    ? `<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300">Rujukan Sahaja</span>`
+                                    : ''
+                                }
+                              </div>
+                              <h4 class="font-bold text-white text-sm mt-1">${escapeHtml(book.title)}</h4>
+                              <p class="text-xs text-slate-400">${escapeHtml(book.author)} • ${escapeHtml(book.category)}</p>
+                              <div class="flex flex-wrap gap-1.5 mt-3">
+                                ${copies
+                                  .map(
+                                    (c) => `
+                                  <span class="text-[11px] font-mono px-2 py-1 rounded-lg border ${
+                                    c.status === 'Tersedia'
+                                      ? 'bg-emerald-950/50 border-emerald-500/30 text-emerald-300'
+                                      : c.status === 'Dipinjam'
+                                      ? 'bg-amber-950/50 border-amber-500/30 text-amber-300'
+                                      : c.status === 'Ditempah'
+                                      ? 'bg-purple-950/50 border-purple-500/30 text-purple-300'
+                                      : 'bg-rose-950/50 border-rose-500/30 text-rose-300'
+                                  }">
+                                    ${escapeHtml(c.id)}: ${escapeHtml(c.status)}
+                                  </span>`
+                                  )
+                                  .join('')}
+                              </div>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                data-book-id="${escapeHtml(book.id)}"
+                                class="btn-open-add-copy px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700"
+                              >
+                                + Naskhah
+                              </button>
+                              <button
+                                type="button"
+                                data-book-id="${escapeHtml(book.id)}"
+                                title="Sunting Maklumat Buku"
+                                class="btn-edit-book inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-xs font-semibold transition-colors"
+                              >
+                                <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                Sunting
+                              </button>
+                              <button
+                                type="button"
+                                data-book-id="${escapeHtml(book.id)}"
+                                title="Buang Buku"
+                                class="btn-delete-book inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-colors"
+                              >
+                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                Buang
+                              </button>
+                            </div>
+                          </div>
+                        `;
+                      })
+                      .join('')}
+                  </div>`
+            }
+          </div>
+        `;
+      } else if (ui.activeTab === 'members') {
+        tabHtml = `
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="font-bold text-white text-base">Direktori Pelajar & Ahli Perpustakaan</h3>
+                <p class="text-xs text-slate-400">Daftar pelajar baharu, import CSV, lantik staf, atau selesaikan denda</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-open-import-members"
+                  class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-xs transition-colors"
+                >
+                  <i data-lucide="upload" class="w-4 h-4"></i> Import Pelajar (CSV)
+                </button>
+                <button
+                  type="button"
+                  id="btn-open-add-member"
+                  class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
+                >
+                  <i data-lucide="plus" class="w-4 h-4"></i> Daftar Ahli Baharu
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th class="p-3.5">No. Kad Ahli</th>
+                      <th class="p-3.5">No. Pengenalan</th>
+                      <th class="p-3.5">Nama Penuh & Emel DELIMa</th>
+                      <th class="p-3.5">Kategori</th>
+                      <th class="p-3.5">Status</th>
+                      <th class="p-3.5">Baki Denda</th>
+                      <th class="p-3.5 text-right">Tindakan</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/60">
+                    ${state.members
+                      .map((m) => {
+                        const isAlreadyStaff = state.staffList.some(
+                          (s) => s.identityNumber.toUpperCase() === m.identityNumber.toUpperCase()
+                        );
+                        return `
+                          <tr class="hover:bg-slate-800/30">
+                            <td class="p-3.5 font-mono text-amber-300 font-bold">${escapeHtml(m.id)}</td>
+                            <td class="p-3.5 font-mono text-slate-300">${escapeHtml(m.identityNumber)}</td>
+                            <td class="p-3.5">
+                              <div class="flex items-center gap-2">
+                                <span class="font-bold text-white">${escapeHtml(m.name)}</span>
+                                ${
+                                  isAlreadyStaff
+                                    ? `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Staf</span>`
+                                    : ''
+                                }
+                              </div>
+                              <div class="text-[11px] text-sky-400 font-mono">${escapeHtml(m.email || '-')}</div>
+                            </td>
+                            <td class="p-3.5 text-slate-300">${escapeHtml(m.tier)} (Had ${m.maxLimit})</td>
+                            <td class="p-3.5">
+                              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                                m.status === 'Aktif'
+                                  ? 'bg-emerald-500/15 text-emerald-300'
+                                  : 'bg-rose-500/20 text-rose-300'
+                              }">
+                                ${escapeHtml(m.status)}
+                              </span>
+                            </td>
+                            <td class="p-3.5 font-semibold text-white">RM ${m.fineBalance.toFixed(2)}</td>
+                            <td class="p-3.5 text-right">
+                              <div class="inline-flex flex-wrap justify-end gap-1.5">
+                                ${
+                                  m.fineBalance > 0
+                                    ? `<button type="button" data-member-id="${escapeHtml(m.id)}" class="btn-settle-fine px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-semibold">
+                                        Selesai Denda
+                                      </button>`
+                                    : ''
+                                }
+                                ${
+                                  !isAlreadyStaff
+                                    ? `<button type="button" data-member-id="${escapeHtml(m.id)}" title="Tambah sebagai Staf Perpustakaan" class="btn-promote-staff inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-semibold">
+                                        <i data-lucide="shield-plus" class="w-3 h-3"></i>
+                                        Tambah Staf
+                                      </button>`
+                                    : ''
+                                }
+                                <button type="button" data-member-id="${escapeHtml(m.id)}" title="Sunting Pelajar / Ahli" class="btn-edit-member inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 font-semibold">
+                                  <i data-lucide="pencil" class="w-3 h-3"></i>
+                                  Sunting
+                                </button>
+                                <button type="button" data-member-id="${escapeHtml(m.id)}" class="btn-toggle-member px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+                                  ${m.status === 'Aktif' ? 'Gantung' : 'Aktifkan'}
+                                </button>
+                                <button type="button" data-member-id="${escapeHtml(m.id)}" title="Buang Pelajar / Ahli" class="btn-delete-member inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold">
+                                  <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                  Buang
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        `;
+                      })
+                      .join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (ui.activeTab === 'logs') {
+        tabHtml = `
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+            <h3 class="font-bold text-white text-sm">Log Audit & Aktiviti Sistem</h3>
+            <div class="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+              ${state.logs
+              .map(
+                (log) => `
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-start justify-between gap-4 text-xs">
+                <div class="flex items-start gap-2.5">
+                  <span class="uppercase text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-amber-300 mt-0.5">
+                    ${escapeHtml(log.type)}
+                  </span>
+                  <span class="text-slate-200 leading-relaxed">${escapeHtml(log.message)}</span>
+                </div>
+                <span class="text-[11px] font-mono text-slate-500 shrink-0">${escapeHtml(log.timestamp)}</span>
+              </div>`
+              )
+              .join('')}
+          </div>
+        </div>
+      `;
+    } else if (ui.activeTab === 'settings') {
+      const cfg = state.settings || INITIAL_DATA.settings;
+      tabHtml = `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Tetapan Polisi & Peraturan Perpustakaan -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
+              <i data-lucide="sliders" class="w-4 h-4 text-amber-400"></i>
+              <h3 class="font-bold text-white text-sm">Polisi Pinjaman & Kadar Denda</h3>
+            </div>
+            <form id="form-system-settings" class="space-y-3.5 text-xs">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="text-slate-400 block mb-1">Tempoh Pinjaman (Hari)</label>
+                  <input name="loanDurationDays" type="number" min="1" max="90" required value="${escapeHtml(cfg.loanDurationDays)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Kadar Denda Harian (RM)</label>
+                  <input name="dailyFineRate" type="number" step="0.10" min="0" required value="${escapeHtml(cfg.dailyFineRate)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="text-slate-400 block mb-1">Had Pembaharuan Maksimum</label>
+                  <input name="maxRenewals" type="number" min="0" max="10" required value="${escapeHtml(cfg.maxRenewals)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Had Sekatan Denda (RM)</label>
+                  <input name="fineBlockThreshold" type="number" step="1" min="1" required value="${escapeHtml(cfg.fineBlockThreshold)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="text-slate-400 block mb-1">Had Buku Pelajar</label>
+                  <input name="studentMaxLimit" type="number" min="1" max="30" required value="${escapeHtml(cfg.studentMaxLimit)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Had Buku Guru</label>
+                  <input name="teacherMaxLimit" type="number" min="1" max="50" required value="${escapeHtml(cfg.teacherMaxLimit)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+              </div>
+              <div class="pt-2 flex justify-end">
+                <button type="submit" class="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold transition-colors">
+                  Simpan Tetapan Sistem
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Pengurusan Staf & Sandaran Data -->
+          <div class="space-y-5">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+              <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                  <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
+                  <h3 class="font-bold text-white text-sm">Senarai Staf Perpustakaan (${state.staffList.length})</h3>
+                </div>
+              </div>
+              <div class="space-y-2 max-h-48 overflow-y-auto pr-1 text-xs">
+                ${state.staffList
+                  .map(
+                    (stf) => `
+                  <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <div>
+                      <p class="font-bold text-white">${escapeHtml(stf.name)}</p>
+                      <p class="text-[11px] font-mono text-slate-400">${escapeHtml(stf.identityNumber)} • ${escapeHtml(stf.position || 'Staf Perpustakaan')}</p>
+                    </div>
+                    ${
+                      stf.identityNumber !== '101124110387' && stf.identityNumber !== state.currentUser.identityNumber
+                        ? `<button type="button" data-staff-id="${escapeHtml(stf.id)}" class="btn-remove-staff px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold">
+                            Lucut Staf
+                          </button>`
+                        : `<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/15 text-amber-300">Utama</span>`
+                    }
+                  </div>`
+                  )
+                  .join('')}
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 text-xs">
+              <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
+                <i data-lucide="database" class="w-4 h-4 text-sky-400"></i>
+                <h3 class="font-bold text-white text-sm">Sandaran & Penyelarasan Cloud</h3>
+              </div>
+              <p class="text-slate-400 leading-relaxed">
+                Muat turun salinan sandaran penuh pangkalan data perpustakaan dalam format JSON atau paksa muat naik ke Google Sheets.
+              </p>
+              <div class="flex flex-wrap gap-2 pt-1">
+                <button type="button" id="btn-export-backup-json" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-700 flex items-center gap-1.5">
+                  <i data-lucide="download" class="w-3.5 h-3.5 text-amber-400"></i>
+                  Muat Turun Sandaran (JSON)
+                </button>
+                <button type="button" id="btn-force-push-cloud" class="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-semibold flex items-center gap-1.5">
+                  <i data-lucide="cloud-upload" class="w-3.5 h-3.5"></i>
+                  Hantar Data ke Cloud
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="space-y-6">
+          <div class="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
+            ${staffTabs
+              .map(
+                (tab) => `
+              <button
+                type="button"
+                data-tab="${tab.id}"
+                class="btn-nav-tab flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  ui.activeTab === tab.id
+                    ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
+                    : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                }"
+              >
+                <i data-lucide="${tab.icon}" class="w-3.5 h-3.5"></i>
+                ${escapeHtml(tab.label)}
+              </button>`
+              )
+              .join('')}
+          </div>
+
+          ${tabHtml}
+        </div>
+      `;
+    }
+
+    function bindDashboardEvents() {
+      // Bar Atas
+      document.getElementById('btn-sync-cloud-header')?.addEventListener('click', () => {
+        fetchFromCloud(APPS_SCRIPT_URL, false);
+      });
+
+      document.getElementById('btn-download-barcode')?.addEventListener('click', downloadStudentBarcode);
+
+      document.getElementById('btn-logout')?.addEventListener('click', handleLogout);
+
+      // Penukaran Tab
+      document.querySelectorAll('.btn-nav-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          ui.activeTab = btn.getAttribute('data-tab');
+          render();
+        });
+      });
+
+      // Carian & Kategori Pelajar
+      document.getElementById('input-student-search')?.addEventListener('input', (e) => {
+        ui.searchQuery = e.target.value;
+        const pos = e.target.selectionStart;
+        render();
+        const newInput = document.getElementById('input-student-search');
+        if (newInput) {
+          newInput.focus();
+          newInput.setSelectionRange(pos, pos);
+        }
+      });
+
+      document.querySelectorAll('.btn-select-cat').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          ui.selectedCategory = btn.getAttribute('data-cat');
+          render();
+        });
+      });
+
+      // Tindakan Pelajar
+      document.querySelectorAll('.btn-student-borrow').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const copyId = btn.getAttribute('data-copy-id');
+          handleCheckout(state.currentUser.id, copyId);
+        });
+      });
+
+      document.querySelectorAll('.btn-student-hold').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const bookId = btn.getAttribute('data-book-id');
+          handlePlaceHold(bookId, state.currentUser.id);
+        });
+      });
+
+      document.querySelectorAll('.btn-student-renew').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const loanId = btn.getAttribute('data-loan-id');
+          handleRenewLoan(loanId);
+        });
+      });
+
+      document.querySelectorAll('.btn-student-cancel-hold').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const holdId = btn.getAttribute('data-hold-id');
+          handleCancelHold(holdId);
+        });
+      });
+
+      // Kaunter Pinjaman Staf
+      document.getElementById('select-checkout-patron')?.addEventListener('change', (e) => {
+        ui.checkoutPatronId = e.target.value;
+        render();
+      });
+
+      document.getElementById('input-checkout-copy')?.addEventListener('input', (e) => {
+        ui.checkoutCopyId = e.target.value;
+        const pos = e.target.selectionStart;
+        render();
+        const newInput = document.getElementById('input-checkout-copy');
+        if (newInput) {
+          newInput.focus();
+          newInput.setSelectionRange(pos, pos);
+        }
+      });
+
+      document.getElementById('select-checkout-copy-quick')?.addEventListener('change', (e) => {
+        ui.checkoutCopyId = e.target.value;
+        render();
+      });
+
+      document.getElementById('btn-confirm-checkout')?.addEventListener('click', () => {
+        handleCheckout(ui.checkoutPatronId, ui.checkoutCopyId);
+      });
+
+      // Kaunter Pemulangan Staf
+      document.getElementById('input-checkin-copy')?.addEventListener('input', (e) => {
+        ui.checkinCopyId = e.target.value;
+      });
+
+      document.getElementById('select-checkin-copy-quick')?.addEventListener('change', (e) => {
+        ui.checkinCopyId = e.target.value;
+        render();
+      });
+
+      document.getElementById('checkbox-checkin-damaged')?.addEventListener('change', (e) => {
+        ui.checkinDamaged = e.target.checked;
+      });
+
+      document.getElementById('btn-confirm-checkin')?.addEventListener('click', () => {
+        handleCheckin(ui.checkinCopyId, ui.checkinDamaged);
+      });
+
+      document.querySelectorAll('.btn-quick-checkin').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const copyId = btn.getAttribute('data-copy-id');
+          handleCheckin(copyId, false);
+        });
+      });
+
+      // Katalog Staf
+      document.getElementById('btn-open-add-book')?.addEventListener('click', () => {
+        ui.activeModal = 'addBook';
+        renderModals();
+        if (window.lucide) lucide.createIcons();
+      });
+
+      document.getElementById('btn-open-import-books')?.addEventListener('click', () => {
+        ui.activeModal = 'importBooks';
+        renderModals();
+        if (window.lucide) lucide.createIcons();
+      });
+
+      document.querySelectorAll('.btn-open-add-copy').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const bookId = btn.getAttribute('data-book-id');
+          ui.selectedBookForCopies = state.books.find((b) => b.id === bookId) || null;
+          ui.activeModal = 'addCopy';
+          renderModals();
+          if (window.lucide) lucide.createIcons();
+        });
+      });
+
+      document.querySelectorAll('.btn-edit-book').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const bookId = btn.getAttribute('data-book-id');
+          ui.editingBook = state.books.find((b) => b.id === bookId) || null;
+          if (!ui.editingBook) return;
+          ui.activeModal = 'editBook';
+          renderModals();
+          if (window.lucide) lucide.createIcons();
+        });
+      });
+
+      document.querySelectorAll('.btn-delete-book').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const bookId = btn.getAttribute('data-book-id');
+          const book = state.books.find((b) => b.id === bookId);
+          if (!book) return;
+          ui.deleteTarget = { type: 'book', id: book.id, title: book.title };
+          ui.activeModal = 'confirmDelete';
+          renderModals();
+          if (window.lucide) lucide.createIcons();
+        });
+      });
+
+      // Ahli Staf
+      document.getElementById('btn-open-add-member')?.addEventListener('click', () => {
+        ui.activeModal = 'addMember';
+        renderModals();
+        if (window.lucide) lucide.createIcons();
+      });
+
+      document.getElementById('btn-open-import-members')?.addEventListener('click', () => {
+        ui.activeModal = 'importMembers';
+        renderModals();
+        if (window.lucide) lucide.createIcons();
+      });
+
+      document.querySelectorAll('.btn-settle-fine').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          handleSettleFines(btn.getAttribute('data-member-id'));
+        });
+      });
+
+      document.querySelectorAll('.btn-promote-staff').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          handlePromoteToStaff(btn.getAttribute('data-member-id'));
+        });
+      });
+
+      document.querySelectorAll('.btn-edit-member').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const memberId = btn.getAttribute('data-member-id');
+          ui.editingMember = state.members.find((m) => m.id === memberId) || null;
+          if (!ui.editingMember) return;
+          ui.activeModal = 'editMember';
+          renderModals();
+          if (window.lucide) lucide.createIcons();
+        });
+      });
+
+      document.querySelectorAll('.btn-toggle-member').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          handleToggleMemberStatus(btn.getAttribute('data-member-id'));
+        });
+      });
+
+      document.querySelectorAll('.btn-delete-member').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const memberId = btn.getAttribute('data-member-id');
+          const member = state.members.find((m) => m.id === memberId);
+          if (!member) return;
+          ui.deleteTarget = { type: 'member', id: member.id, title: `${member.name} (${member.identityNumber})` };
+          ui.activeModal = 'confirmDelete';
+          renderModals();
+          if (window.lucide) lucide.createIcons();
+        });
+      });
+
+      // Tetapan Akaun Pelajar
+      document.getElementById('form-student-settings')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const newName = e.target.name.value.trim().toUpperCase();
+        const newEmail = e.target.email.value.trim().toLowerCase();
+        if (!newName || !newEmail) return;
+
+        state.members = state.members.map((m) =>
+          m.id === state.currentUser.id ? { ...m, name: newName, email: newEmail } : m
+        );
+        state.currentUser.name = newName;
+        state.currentUser.email = newEmail;
+        addLog('sistem', `Profil Dikemas Kini: ${newName} mengemas kini maklumat akaun & Emel DELIMa.`);
+        saveState();
+        notify('Tetapan akaun berjaya disimpan!');
+        render();
+      });
+
+      // Tetapan Sistem Staf
+      document.getElementById('form-system-settings')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const f = e.target;
+        const studentLimit = Math.max(1, parseInt(f.studentMaxLimit.value, 10) || 5);
+        const teacherLimit = Math.max(1, parseInt(f.teacherMaxLimit.value, 10) || 10);
+
+        state.settings = {
+          ...state.settings,
+          loanDurationDays: Math.max(1, parseInt(f.loanDurationDays.value, 10) || 14),
+          dailyFineRate: Math.max(0, parseFloat(f.dailyFineRate.value) || 0.5),
+          maxRenewals: Math.max(0, parseInt(f.maxRenewals.value, 10) || 2),
+          fineBlockThreshold: Math.max(1, parseFloat(f.fineBlockThreshold.value) || 10),
+          studentMaxLimit: studentLimit,
+          teacherMaxLimit: teacherLimit
+        };
+
+        state.members = state.members.map((m) => ({
+          ...m,
+          maxLimit: m.tier === 'Guru' ? teacherLimit : studentLimit
+        }));
+
+        addLog('sistem', `Tetapan Sistem Dikemas Kini oleh ${state.currentUser.name}.`);
+        saveState();
+        notify('Tetapan sistem perpustakaan berjaya disimpan!');
+        render();
+      });
+
+      document.querySelectorAll('.btn-remove-staff').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const staffId = btn.getAttribute('data-staff-id');
+          const target = state.staffList.find((s) => s.id === staffId);
+          if (!target) return;
+          state.staffList = state.staffList.filter((s) => s.id !== staffId);
+          addLog('sistem', `Akses Staf Dilucutkan: ${target.name} (${target.identityNumber}).`);
+          saveState();
+          notify(`Akses staf bagi ${target.name} telah dibuang.`);
+          render();
+        });
+      });
+
+      document.getElementById('btn-export-backup-json')?.addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `SANDARAN-PERPUSTAKAAN-IBNU-SINA-${state.systemDate}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        notify('Fail sandaran JSON berjaya dimuat turun.');
+      });
+
+      document.getElementById('btn-force-push-cloud')?.addEventListener('click', () => {
+        pushToCloud(state, APPS_SCRIPT_URL).then(() => notify('Data berjaya dihantar ke Google Sheets!'));
+      });
+    }
+
+    // ----------------------------------------------------------------------------
+    // 3. MODALS (TAMBAH BUKU, IMPORT CSV, DLL.)
+    // ----------------------------------------------------------------------------
+    function renderModals() {
+      const container = document.getElementById('modal-container');
+      if (!ui.activeModal) {
+        container.innerHTML = '';
+        return;
+      }
+
+      if (ui.activeModal === 'addBook') {
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-white text-base">Tambah Judul Buku Baharu</h3>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <form id="form-add-book" class="space-y-3 text-xs">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">Tajuk Buku *</label>
+                    <input name="title" required oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Pengarang *</label>
+                    <input name="author" required oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                </div>
+                <div class="grid grid-cols-3 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">ISBN</label>
+                    <input name="isbn" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Kategori</label>
+                    <input name="category" value="Umum" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">No. Dewey</label>
+                    <input name="dewey" value="000.00" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">Bilangan Naskhah Fizikal</label>
+                    <input name="copiesCount" type="number" min="1" max="50" value="2" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Lokasi Rak</label>
+                    <input name="location" value="Rak Utama" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Sinopsis / Ringkasan Buku</label>
+                  <textarea name="summary" rows="2" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"></textarea>
+                </div>
+                <label class="flex items-center gap-2 pt-1 cursor-pointer">
+                  <input name="isReference" type="checkbox" />
+                  <span class="text-slate-300">Tandakan sebagai Rujukan Sahaja (Tidak boleh dipinjam)</span>
+                </label>
+                <div class="flex justify-end gap-2 pt-3">
+                  <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300">Batal</button>
+                  <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold">Simpan Buku</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('form-add-book')?.addEventListener('submit', handleAddBookSubmit);
+      } else if (ui.activeModal === 'editBook' && ui.editingBook) {
+        const b = ui.editingBook;
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-white text-base">Sunting Maklumat Buku</h3>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <form id="form-edit-book" class="space-y-3 text-xs">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">Tajuk Buku *</label>
+                    <input name="title" required value="${escapeHtml(b.title)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Pengarang *</label>
+                    <input name="author" required value="${escapeHtml(b.author)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">ISBN</label>
+                    <input name="isbn" value="${escapeHtml(b.isbn)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Kategori</label>
+                    <input name="category" value="${escapeHtml(b.category)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">No. Dewey</label>
+                    <input name="dewey" value="${escapeHtml(b.dewey)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Tahun</label>
+                    <input name="year" type="number" value="${escapeHtml(b.year || new Date().getFullYear())}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Sinopsis / Ringkasan Buku</label>
+                  <textarea name="summary" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white">${escapeHtml(b.summary || '')}</textarea>
+                </div>
+                <label class="flex items-center gap-2 pt-1 cursor-pointer">
+                  <input name="isReference" type="checkbox" ${b.isReference ? 'checked' : ''} />
+                  <span class="text-slate-300">Tandakan sebagai Rujukan Sahaja (Tidak boleh dipinjam)</span>
+                </label>
+                <div class="flex justify-end gap-2 pt-3">
+                  <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300">Batal</button>
+                  <button type="submit" class="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold">Kemas Kini Buku</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('form-edit-book')?.addEventListener('submit', handleEditBookSubmit);
+      } else if (ui.activeModal === 'addCopy' && ui.selectedBookForCopies) {
+        const book = ui.selectedBookForCopies;
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-white text-base">Tambah Naskhah Fizikal</h3>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <p class="text-xs text-slate-400">
+                Menjana kod bar naskhah baharu bagi judul <strong class="text-white">${escapeHtml(book.title)}</strong>.
+              </p>
+              <form id="form-add-copy" class="space-y-4 text-xs">
+                <div>
+                  <label class="text-slate-400 block mb-1">Lokasi Rak</label>
+                  <input name="location" value="Rak Umum • ${escapeHtml(book.dewey)}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                  <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300">Batal</button>
+                  <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold">Jana Kod Bar Naskhah</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('form-add-copy')?.addEventListener('submit', handleAddCopySubmit);
+      } else if (ui.activeModal === 'addMember') {
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-white text-base">Daftar Ahli Baharu</h3>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <form id="form-add-member" class="space-y-3 text-xs">
+                <div>
+                  <label class="text-slate-400 block mb-1">Nama Penuh *</label>
+                  <input name="name" required oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">No. Kad Pengenalan / ID Pelajar *</label>
+                  <input name="identityNumber" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Emel DELIMa *</label>
+                  <input name="email" type="email" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Kategori Keahlian</label>
+                  <select name="tier" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white">
+                    <option value="Pelajar">Pelajar (Had 5 buku)</option>
+                    <option value="Biasa">Biasa (Had 5 buku)</option>
+                    <option value="Guru">Guru (Had 10 buku)</option>
+                  </select>
+                </div>
+                <div class="flex justify-end gap-2 pt-3">
+                  <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300">Batal</button>
+                  <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold">Daftar Ahli</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('form-add-member')?.addEventListener('submit', handleAddMemberSubmit);
+      } else if (ui.activeModal === 'editMember' && ui.editingMember) {
+        const m = ui.editingMember;
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="font-bold text-white text-base">Sunting Maklumat Pelajar / Ahli</h3>
+                  <p class="text-[11px] font-mono text-amber-400">No. Kad Ahli: ${escapeHtml(m.id)}</p>
+                </div>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <form id="form-edit-member" class="space-y-3 text-xs">
+                <div>
+                  <label class="text-slate-400 block mb-1">Nama Penuh *</label>
+                  <input name="name" required value="${escapeHtml(m.name)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white uppercase" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">No. Kad Pengenalan / ID Pelajar *</label>
+                  <input name="identityNumber" required value="${escapeHtml(m.identityNumber)}" oninput="this.value = this.value.toUpperCase()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono uppercase" />
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Emel DELIMa</label>
+                  <input name="email" type="email" value="${escapeHtml(m.email || '')}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                </div>
+                <div class="grid grid-cols-3 gap-3">
+                  <div>
+                    <label class="text-slate-400 block mb-1">Kategori</label>
+                    <select name="tier" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white">
+                      <option value="Pelajar" ${m.tier === 'Pelajar' ? 'selected' : ''}>Pelajar</option>
+                      <option value="Biasa" ${m.tier === 'Biasa' ? 'selected' : ''}>Biasa</option>
+                      <option value="Guru" ${m.tier === 'Guru' ? 'selected' : ''}>Guru</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Status</label>
+                    <select name="status" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white">
+                      <option value="Aktif" ${m.status === 'Aktif' ? 'selected' : ''}>Aktif</option>
+                      <option value="Digantung" ${m.status === 'Digantung' ? 'selected' : ''}>Digantung</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-slate-400 block mb-1">Baki Denda (RM)</label>
+                    <input name="fineBalance" type="number" step="0.10" min="0" value="${escapeHtml(m.fineBalance.toFixed(2))}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-white" />
+                  </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-3">
+                  <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300">Batal</button>
+                  <button type="submit" class="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold">Simpan Perubahan</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('form-edit-member')?.addEventListener('submit', handleEditMemberSubmit);
+      } else if (ui.activeModal === 'confirmDelete' && ui.deleteTarget) {
+        const target = ui.deleteTarget;
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-rose-500/30 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                  <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+                </div>
+                <div>
+                  <h3 class="font-bold text-white text-base">Sahkan Pemadaman Rekod</h3>
+                  <p class="text-xs text-slate-400">Tindakan ini tidak boleh dikembalikan</p>
+                </div>
+              </div>
+              <p class="text-xs text-slate-300 leading-relaxed bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                Adakah anda pasti mahu membuang ${target.type === 'book' ? 'buku' : 'rekod pelajar/ahli'}{' '}
+                <strong class="text-white">${escapeHtml(target.title)}</strong> daripada sistem?
+              </p>
+              <div class="flex justify-end gap-2 pt-2">
+                <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Batal</button>
+                <button type="button" id="btn-confirm-delete-action" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold">
+                  Ya, Buang Rekod
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        document.getElementById('btn-confirm-delete-action')?.addEventListener('click', () => {
+          const currentTarget = ui.deleteTarget;
+          ui.activeModal = null;
+          ui.deleteTarget = null;
+          renderModals();
+          if (currentTarget.type === 'book') {
+            handleDeleteBook(currentTarget.id);
+          } else {
+            handleDeleteMember(currentTarget.id);
+          }
+        });
+      } else if (ui.activeModal === 'importBooks' || ui.activeModal === 'importMembers') {
+        const isBooks = ui.activeModal === 'importBooks';
+        const modalTitle = isBooks
+          ? 'Import Buku Secara Pukal (CSV)'
+          : 'Import Pelajar / Ahli Secara Pukal (CSV)';
+        const modalDesc = isBooks
+          ? 'Muat naik fail .csv atau tampal teks CSV dengan format lajur: Tajuk, Pengarang, ISBN, Kategori, Dewey, Bilangan Naskhah, Rujukan Sahaja (Ya/Tidak)'
+          : 'Muat naik fail .csv atau tampal teks CSV dengan format lajur: Nama Penuh, No. Kad Pengenalan / ID Pelajar, Emel DELIMa, Kategori (Pelajar/Guru/Biasa)';
+        const sampleCsv = isBooks
+          ? `Tajuk,Pengarang,ISBN,Kategori,Dewey,Bilangan Naskhah,Rujukan Sahaja\nSEJARAH PERADABAN ISLAM,DR. YUSUF AL-QARADAWI,978-967-001,Sejarah,297.09,3,Tidak\nKAMUS DEWAN EDISI KEEMPAT,DEWAN BAHASA DAN PUSTAKA,978-983-62,Rujukan,499.23,2,Ya`
+          : `Nama Penuh,No Pengenalan,Emel DELIMa,Kategori\nMUHAMMAD AMIRUL BIN RAZAK,050814-11-0123,m-050814@moe-dl.edu.my,Pelajar\nNURUL AIN BINTI HASSAN,060220-11-0456,m-060220@moe-dl.edu.my,Pelajar\nCIKGU ZULKIFLI BIN OMAR,820411-11-5119,g-820411@moe-dl.edu.my,Guru`;
+
+        container.innerHTML = `
+          <div class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-white text-base">${escapeHtml(modalTitle)}</h3>
+                <button type="button" class="btn-close-modal text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+              </div>
+              <p class="text-xs text-slate-400 leading-relaxed">${escapeHtml(modalDesc)}</p>
+              <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-xs text-slate-300">
+                  Pilih fail <span class="font-mono text-amber-400">.csv</span> daripada komputer anda:
+                </div>
+                <div class="flex items-center gap-2">
+                  <input id="input-csv-file" type="file" accept=".csv,text/csv" class="hidden" />
+                  <button
+                    type="button"
+                    id="btn-trigger-csv-file"
+                    class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 flex items-center gap-1.5"
+                  >
+                    <i data-lucide="upload" class="w-3.5 h-3.5 text-amber-400"></i>
+                    Muat Naik Fail CSV
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-fill-sample-csv"
+                    class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs text-amber-300 border border-amber-500/30"
+                  >
+                    Isi Contoh CSV
+                  </button>
+                </div>
+              </div>
+              <div class="text-xs">
+                <label class="text-slate-400 block mb-1">Kandungan CSV (Boleh disunting sebelum import):</label>
+                <textarea
+                  id="textarea-csv-content"
+                  rows="6"
+                  placeholder="${escapeHtml(sampleCsv)}"
+                  class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-amber-500"
+                ></textarea>
+              </div>
+              <div class="flex justify-end gap-2 pt-2">
+                <button type="button" class="btn-close-modal px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs">Batal</button>
+                <button type="button" id="btn-submit-csv" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs">
+                  Import Data CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+
+        const fileInput = document.getElementById('input-csv-file');
+        const textarea = document.getElementById('textarea-csv-content');
+
+        document.getElementById('btn-trigger-csv-file')?.addEventListener('click', () => {
+          fileInput?.click();
+        });
+
+        fileInput?.addEventListener('change', (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            if (textarea) textarea.value = String(ev.target?.result || '');
+          };
+          reader.readAsText(file);
+        });
+
+        document.getElementById('btn-fill-sample-csv')?.addEventListener('click', () => {
+          if (textarea) textarea.value = sampleCsv;
+        });
+
+        document.getElementById('btn-submit-csv')?.addEventListener('click', () => {
+          const text = textarea?.value || '';
+          if (isBooks) {
+            handleImportBooksCsv(text);
+          } else {
+            handleImportMembersCsv(text);
+          }
+        });
+      }
+
+      document.querySelectorAll('.btn-close-modal').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          ui.activeModal = null;
+          ui.selectedBookForCopies = null;
+          ui.editingBook = null;
+          ui.editingMember = null;
+          ui.deleteTarget = null;
+          renderModals();
+        });
+      });
+    }
+
+    // ============================================================================
+    // MULAKAN APLIKASI
+    // ============================================================================
+    window.addEventListener('DOMContentLoaded', () => {
+      render();
+      if (cloudUrl) {
+        fetchFromCloud(cloudUrl, true);
+      } else {
+        isInitialCloudFetchDone = true;
+      }
+    });
+  </script>
+</body>
+</html>
